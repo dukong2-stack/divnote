@@ -137,23 +137,27 @@ def fetch_prices():
         sys.exit("[중단] DATA_GO_KR_KEY가 없습니다. 저장소 Settings → Secrets에 공공데이터포털 인증키를 등록하세요.")
     for back in range(0, 12):
         d = (NOW - dt.timedelta(days=back)).strftime("%Y%m%d")
-        rows, page, total = [], 1, None
+        rows, page, total = [], 1, 0
         while True:
             try:
                 r = S.get(PRICE_URL, params={
                     "serviceKey": GO_KEY, "resultType": "json", "numOfRows": 5000, "pageNo": page, "basDt": d,
                 }, timeout=60)
+            except requests.RequestException as e:
+                sys.exit(f"[중단] 주식시세 API에 접속하지 못했습니다: {e}")
+            text = r.text.strip()
+            try:
                 j = r.json()
-            except Exception as e:
-                head = r.text[:200] if "r" in locals() else ""
-                sys.exit(f"[중단] 주식시세 API 응답을 읽지 못했습니다: {e} {head}")
-            hdr = j.get("response", {}).get("header", {})
-            if hdr.get("resultCode") not in ("00", None):
-                sys.exit(f"[중단] 주식시세 API 오류: {hdr}")
-            body = j["response"]["body"]
+            except ValueError:
+                sys.exit(f"[중단] 주식시세 API 응답이 JSON이 아닙니다 (HTTP {r.status_code}): {text[:500]}")
+            resp = j.get("response", j) if isinstance(j, dict) else {}
+            hdr = resp.get("header") or {}
+            body = resp.get("body")
+            if body is None or str(hdr.get("resultCode", "00")) != "00":
+                sys.exit(f"[중단] 주식시세 API 오류 (HTTP {r.status_code}): {text[:500]}")
             total = int(body.get("totalCount") or 0)
             items = body.get("items") or {}
-            items = items.get("item", []) if isinstance(items, dict) else []
+            items = items.get("item", []) if isinstance(items, dict) else items
             if isinstance(items, dict):
                 items = [items]
             rows += items
@@ -165,8 +169,7 @@ def fetch_prices():
             return d, rows
     sys.exit("[중단] 최근 12일 동안 주가 데이터가 없습니다.")
 
-
-# ───────────────────────── 2. 고유번호 ─────────────────────────
+  # ───────────────────────── 2. 고유번호 ─────────────────────────
 def corp_codes():
     f = CACHE / "corpcode.json"
     if f.exists() and (time.time() - f.stat().st_mtime) < 7 * 86400:
