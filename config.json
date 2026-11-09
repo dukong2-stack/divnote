@@ -1,0 +1,19 @@
+{
+  "_설명": "숫자만 바꾸고 저장하면 다음 수집부터 반영됩니다. 시가총액은 억원, 비율은 % 단위입니다.",
+  "min_mcap_eok": 1000,
+  "include_kosdaq": true,
+  "min_profit_years": 5,
+  "min_roe_3y": 8,
+  "min_consec_div_years": 5,
+  "max_dps_cuts_5y": 1,
+  "max_payout": 80,
+  "min_current_yield": 3.0,
+  "payout_flag": 40,
+  "top_n": 30,
+  "weights": {
+    "value": 30,
+    "dividend": 25,
+    "quality": 25,
+    "growth": 20
+  }
+}
