@@ -132,29 +132,30 @@ def dart(path, params, raw=False):
 
 
 # ───────────────────────── 1. 주가 ─────────────────────────
-def fetch_prices():
+NAVER_URL = "https://m.stock.naver.com/api/stocks/marketValue/{mkt}"
+
+
+def fetch_prices_go():
+    """공공데이터포털 주식시세. 실패하면 예외를 던져 네이버로 넘어감"""
     if not GO_KEY:
-        sys.exit("[중단] DATA_GO_KR_KEY가 없습니다. 저장소 Settings → Secrets에 공공데이터포털 인증키를 등록하세요.")
+        raise RuntimeError("DATA_GO_KR_KEY 없음")
     for back in range(0, 12):
         d = (NOW - dt.timedelta(days=back)).strftime("%Y%m%d")
         rows, page, total = [], 1, 0
         while True:
-            try:
-                r = S.get(PRICE_URL, params={
-                    "serviceKey": GO_KEY, "resultType": "json", "numOfRows": 5000, "pageNo": page, "basDt": d,
-                }, timeout=60)
-            except requests.RequestException as e:
-                sys.exit(f"[중단] 주식시세 API에 접속하지 못했습니다: {e}")
+            r = S.get(PRICE_URL, params={
+                "serviceKey": GO_KEY, "resultType": "json", "numOfRows": 5000, "pageNo": page, "basDt": d,
+            }, timeout=60)
             text = r.text.strip()
             try:
                 j = r.json()
             except ValueError:
-                sys.exit(f"[중단] 주식시세 API 응답이 JSON이 아닙니다 (HTTP {r.status_code}): {text[:500]}")
+                raise RuntimeError(f"JSON 아님 (HTTP {r.status_code}): {text[:300]}")
             resp = j.get("response", j) if isinstance(j, dict) else {}
             hdr = resp.get("header") or {}
             body = resp.get("body")
             if body is None or str(hdr.get("resultCode", "00")) != "00":
-                sys.exit(f"[중단] 주식시세 API 오류 (HTTP {r.status_code}): {text[:500]}")
+                raise RuntimeError(f"HTTP {r.status_code}: {text[:300]}")
             total = int(body.get("totalCount") or 0)
             items = body.get("items") or {}
             items = items.get("item", []) if isinstance(items, dict) else items
@@ -165,11 +166,58 @@ def fetch_prices():
                 break
             page += 1
         if rows:
-            log(f"주가 기준일 {d}: {len(rows)}종목")
             return d, rows
-    sys.exit("[중단] 최근 12일 동안 주가 데이터가 없습니다.")
+    raise RuntimeError("최근 12일 동안 데이터 없음")
 
-  # ───────────────────────── 2. 고유번호 ─────────────────────────
+
+def fetch_prices_naver():
+    """네이버 증권 공개 시세(시가총액순). 인증키 불필요"""
+    hdr = {"User-Agent": "Mozilla/5.0", "Referer": "https://m.stock.naver.com/"}
+    rows = []
+    for mkt in ("KOSPI", "KOSDAQ"):
+        for page in range(1, 61):
+            try:
+                r = S.get(NAVER_URL.format(mkt=mkt), params={"page": page, "pageSize": 100}, headers=hdr, timeout=30)
+                j = r.json()
+            except Exception as e:
+                sys.exit(f"[중단] 네이버 시세 응답을 읽지 못했습니다 ({mkt} {page}쪽): {e}")
+            items = j.get("stocks") if isinstance(j, dict) else j
+            if not items:
+                break
+            if page == 1 and mkt == "KOSPI":
+                log("  네이버 응답 필드:", list(items[0].keys())[:25])
+            for it in items:
+                code = str(it.get("itemCode") or "").strip()
+                if len(code) != 6:
+                    continue
+                if str(it.get("stockEndType") or "stock").lower() != "stock":
+                    continue  # ETF·ETN 등 제외
+                mv = num(it.get("marketValue"))
+                if mv is not None and mv < 1e9:  # 억원 단위면 원으로 환산
+                    mv *= 1e8
+                rows.append({"srtnCd": code, "itmsNm": it.get("stockName") or it.get("itemName"),
+                             "clpr": num(it.get("closePrice")), "mrktTotAmt": mv, "mrktCtg": mkt})
+            total = j.get("totalCount") if isinstance(j, dict) else None
+            if total and page * 100 >= int(total):
+                break
+            time.sleep(0.2)
+    if len(rows) < 1000:
+        sys.exit(f"[중단] 네이버 시세가 {len(rows)}종목만 수집되었습니다. 이 로그를 보내 주세요.")
+    return NOW.strftime("%Y%m%d"), rows
+
+
+def fetch_prices():
+    try:
+        d, rows = fetch_prices_go()
+        log(f"주가(공공데이터포털) 기준일 {d}: {len(rows)}종목")
+        return d, rows
+    except Exception as e:
+        log(f"공공데이터포털 실패 → 네이버 시세로 전환 ({str(e)[:150]})")
+    d, rows = fetch_prices_naver()
+    log(f"주가(네이버) {d}: {len(rows)}종목")
+    return d, rows
+  
+# ───────────────────────── 2. 고유번호 ─────────────────────────
 def corp_codes():
     f = CACHE / "corpcode.json"
     if f.exists() and (time.time() - f.stat().st_mtime) < 7 * 86400:
