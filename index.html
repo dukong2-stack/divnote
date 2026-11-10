@@ -163,6 +163,13 @@ details.snap td,details.snap th{padding:7px 14px;border-top:1px solid var(--line
 details.snap td:first-child,details.snap th:first-child{text-align:left}
 details.snap td:first-child{white-space:nowrap}
 details.snap th{font-weight:500;color:var(--muted);font-size:12px}
+.ovl{display:flex;align-items:center;gap:12px;width:100%;text-align:left;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-l);padding:12px 14px;margin:0 0 12px}
+.ovl .n{font-size:26px;font-weight:700;color:var(--slate);min-width:36px;text-align:center;line-height:1}
+.ovl .t{flex:1;font-size:14px;font-weight:600}
+.ovl .t small{display:block;font-weight:400;font-size:12px;color:var(--muted)}
+.ovl .go{color:var(--muted);font-size:18px}
+.bd{font-size:11px;font-weight:600;border-radius:4px;padding:0 5px;margin-left:6px;vertical-align:2px;color:#fff;background:var(--slate)}
+.bd.s3{background:var(--celadon)}.bd.s1{background:var(--muted)}
 .toast{position:fixed;left:50%;bottom:calc(76px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:9px 16px;border-radius:999px;font-size:13px;z-index:30;opacity:0;pointer-events:none;transition:opacity .2s}
 .toast.on{opacity:.92}
 .note{font-size:12px;color:var(--muted);margin:10px 2px}
@@ -210,7 +217,7 @@ const store = {
 };
 let PF = store.get("dv.portfolio", {holdings:[], cash:0});
 let RULES = store.get("dv.rules", {targetN:12, maxW:10, secCap:25, band:5, gap:20});
-let L = null, U = null, P = null, H = [];
+let L = null, U = null, P = null, H = [], B = null;
 let candFilter = "all";
 
 async function getJSON(path){
@@ -221,6 +228,7 @@ async function getJSON(path){
 async function load(){
   const res = await Promise.allSettled([getJSON("data/latest.json"), getJSON("data/universe.json"), getJSON("data/prices.json"), getJSON("data/history/index.json")]);
   [L, U, P, H] = res.map(x => x.status==="fulfilled" ? x.value : null);
+  try{ B = await getJSON("../badak/data/latest.json"); }catch(e){ B = null; }
   H = H || [];
   $("#asof").textContent = L ? `주가 ${fmtDate(L.price_date)} 기준` : "데이터 없음";
   renderAll();
@@ -257,17 +265,62 @@ function auditorOf(code){
   return c?.auditor || U?.u?.[code]?.a || null;
 }
 
+/* ── 바닥 신호와 겹치는 후보 ── */
+const STG = {1:"① 과매도", 2:"② 바닥 형성", 3:"③ 전환 확인"};
+const CIRC = {1:"①", 2:"②", 3:"③"};
+function badakMap(){
+  const m = {};
+  (B?.items||[]).forEach(i => { if((i.stage||0) >= 1) m[i.code] = i; });
+  return m;
+}
+function overlaps(){
+  if(!L || !B) return [];
+  const m = badakMap();
+  return L.candidates.filter(c => m[c.code]).map(c => ({c, b:m[c.code]}))
+    .sort((x,y) => (y.b.stage - x.b.stage) || (y.c.score - x.c.score));
+}
+function renderOverlap(){
+  const ov = overlaps();
+  $("#sheetPanel").innerHTML = `
+    <div class="bar"><div><h3>바닥 신호와 겹치는 후보 ${ov.length}종목</h3>
+      <div class="sub">배당 후보 ${L.candidates.length}종목 중 바닥 신호 단계에 들어간 종목. 바닥 신호 기준일 ${esc(B?.meta?.asof||"–")}</div></div>
+      <button class="x" aria-label="닫기" id="closeSheet">×</button></div>
+    ${ov.length ? `<div class="list">${ov.map(({c,b}) => `
+      <button class="row" data-code="${c.code}">
+        <span class="rk">${L.candidates.indexOf(c)+1}</span>
+        <span><span class="nm">${esc(c.name)}</span><span class="bd s${b.stage}">${STG[b.stage]||b.stage}</span>
+          <span class="meta" style="display:block">배당 점수 ${Math.round(c.score)}, 바닥 점수 ${Math.round(b.score)}, 단계 진입 ${esc(b.since||"–")}</span></span>
+        <span class="sc">${Math.round(c.score)}<span>점</span></span>
+        <span class="body">${band(c)}${c.reasons[0]?`<span class="why">${esc(c.reasons[0])}</span>`:""}</span>
+      </button>`).join("")}</div>` : `<div class="empty"><b>겹치는 종목이 없습니다</b>지금은 배당 후보 중 바닥 신호 단계에 들어간 종목이 없습니다.</div>`}
+    <p class="note">바닥 신호 앱은 코스피 종목만 다루므로 코스닥 후보는 겹치지 않습니다. 종목을 누르면 배당 상세가 열립니다.</p>
+    <div class="links"><a class="btn" href="../badak/" target="_blank" rel="noopener">바닥 신호 앱 열기</a></div>`;
+  $("#closeSheet").onclick = closeSheet;
+  $("#sheetPanel").querySelectorAll(".row").forEach(b => b.onclick = () => openDetail(b.dataset.code, true));
+}
+let sheetBack = null;
+function openOverlap(){
+  sheetBack = null;
+  renderOverlap();
+  if(!$("#sheet").classList.contains("open")) history.pushState({v:"sheet"}, "");
+  $("#sheet").classList.add("open");
+  $("#sheetPanel").scrollTop = 0;
+}
+
 /* ── 후보 ── */
 function renderCand(){
   const el = $("#p-cand");
   if(!L){ el.innerHTML = `<div class="empty" style="margin-top:12px"><b>아직 수집된 데이터가 없습니다</b>저장소의 Actions 탭에서 collect 워크플로를 한 번 실행하면 10~20분 뒤 후보가 표시됩니다.</div>`; return; }
   const held = heldCodes();
+  const bm = badakMap();
   let list = L.candidates;
   if(candFilter==="new") list = list.filter(c => !held.has(c.code));
   if(candFilter==="clean") list = list.filter(c => !c.cautions.length);
   el.innerHTML = `
     <h2>이번 회차 후보 ${L.candidates.length}종목</h2>
     <p class="lede">${L.fiscal_year}년 사업보고서 기준. 평가 ${L.counts.universe}종목 중 이익 기준 ${L.counts.stage1}종목, 배당 기준까지 ${L.counts.stage2}종목 통과.</p>
+    ${B ? (() => { const ov = overlaps(); const cnt = k => ov.filter(o => o.b.stage===k).length;
+      return `<button class="ovl" id="ovlBtn"><span class="n">${ov.length}</span><span class="t">바닥 신호와 겹치는 후보<small>${ov.length ? `③ ${cnt(3)}, ② ${cnt(2)}, ① ${cnt(1)} — 눌러서 목록 보기` : "지금은 겹치는 종목이 없습니다"}</small></span><span class="go">›</span></button>`; })() : ""}
     <div class="chips" role="group">
       ${[["all","전체"],["new","미보유"],["clean","주의사항 없음"]].map(([k,t]) => `<button class="chip" data-f="${k}" aria-pressed="${candFilter===k}">${t}</button>`).join("")}
     </div>
@@ -275,7 +328,7 @@ function renderCand(){
     <div class="list">${list.map(c => `
       <button class="row" data-code="${c.code}">
         <span class="rk">${L.candidates.indexOf(c)+1}</span>
-        <span><span class="nm">${esc(c.name)}</span>${held.has(c.code)?`<span class="held">보유</span>`:""}${c.cautions.length?`<span class="flag">주의 ${c.cautions.length}</span>`:""}
+        <span><span class="nm">${esc(c.name)}</span>${bm[c.code]?`<span class="bd s${bm[c.code].stage}">바닥${CIRC[bm[c.code].stage]||""}</span>`:""}${held.has(c.code)?`<span class="held">보유</span>`:""}${c.cautions.length?`<span class="flag">주의 ${c.cautions.length}</span>`:""}
           <span class="meta" style="display:block">${esc(c.sector)}, ${c.market==="KOSPI"?"코스피":"코스닥"}, PER ${c.per??"–"}배, 감사 ${esc(firm(c.auditor))}</span></span>
         <span class="sc">${Math.round(c.score)}<span>점</span></span>
         <span class="body">${segbar(c.cats)}${band(c)}${c.reasons[0]?`<span class="why">${esc(c.reasons[0])}</span>`:""}</span>
@@ -283,6 +336,7 @@ function renderCand(){
     ${L.others.length ? `<p class="note">기준은 통과했지만 순위 밖인 종목 ${L.others.length}개는 보유 종목 비교에 사용됩니다.</p>`:""}`;
   el.querySelectorAll(".chip").forEach(b => b.onclick = () => { candFilter = b.dataset.f; renderCand(); });
   el.querySelectorAll(".row").forEach(b => b.onclick = () => openDetail(b.dataset.code));
+  const ob = $("#ovlBtn"); if(ob) ob.onclick = openOverlap;
 }
 
 function bars(vals, years, color, unit, opt={}){
@@ -306,7 +360,7 @@ function bars(vals, years, color, unit, opt={}){
 function findCand(code){
   return L && (L.candidates.find(c => c.code===code) || null);
 }
-function openDetail(code){
+function openDetail(code, fromList=false){
   const c = findCand(code); if(!c) return;
   const ys = L.years;
   const rank = L.candidates.indexOf(c)+1;
@@ -314,6 +368,7 @@ function openDetail(code){
   $("#sheetPanel").innerHTML = `
     <div class="bar"><div><h3>${esc(c.name)}</h3><div class="sub">${c.code}, ${esc(c.sector)}, ${c.market==="KOSPI"?"코스피":"코스닥"}, 시총 ${eokTxt(c.mcap)}, ${won(c.price)}원</div></div>
       <button class="x" aria-label="닫기" id="closeSheet">×</button></div>
+    ${(() => { const b = badakMap()[c.code]; return b ? `<div class="block" style="padding:10px 16px"><span class="bd s${b.stage}" style="margin:0 8px 0 0">${STG[b.stage]}</span>바닥 신호 점수 ${Math.round(b.score)}, ${esc(b.since||"")} 진입</div>` : ""; })()}
     <div class="block"><div class="scoreline"><div><div class="big">${Math.round(c.score)}</div><div class="sub">후보 ${rank}위</div></div>
       <div class="cats">${Object.entries(CAT).map(([k,[t,col]]) => `<div class="cat"><span>${t}</span><span class="t"><b style="width:${c.cats[k]}%;background:${col}"></b></span><em>${c.cats[k]}</em></div>`).join("")}</div></div></div>
     <div class="block"><h4>배당률 밴드</h4>${band(c,true)}
@@ -347,7 +402,8 @@ function openDetail(code){
       <a class="btn" href="https://finance.naver.com/item/main.naver?code=${c.code}" target="_blank" rel="noopener">네이버 증권</a>
       <a class="btn" href="https://dart.fss.or.kr/dsab007/main.do?option=corp&textCrpNm=${encodeURIComponent(c.name)}" target="_blank" rel="noopener">DART 공시</a>
     </div>`;
-  if(!$("#sheet").classList.contains("open")) history.pushState({v:"sheet"}, "");
+  if(!$("#sheet").classList.contains("open") || fromList) history.pushState({v:"sheet"}, "");
+  sheetBack = fromList ? renderOverlap : null;
   $("#sheet").classList.add("open");
   $("#sheetPanel").scrollTop = 0;
   $("#closeSheet").onclick = closeSheet;
@@ -356,7 +412,7 @@ function openDetail(code){
 function hideSheet(){ $("#sheet").classList.remove("open"); }
 function closeSheet(){
   if(!$("#sheet").classList.contains("open")) return;
-  if(history.state?.v === "sheet") history.back(); else hideSheet();
+  if(history.state?.v === "sheet") history.back(); else { sheetBack = null; hideSheet(); }
 }
 $("#sheet").addEventListener("click", e => { if(e.target.id==="sheet") closeSheet(); });
 document.addEventListener("keydown", e => { if(e.key==="Escape") closeSheet(); });
@@ -570,7 +626,10 @@ history.replaceState({v:"root"}, "");
 history.pushState({v:"app"}, "");
 let guardTimer;
 window.addEventListener("popstate", () => {
-  if($("#sheet").classList.contains("open")){ hideSheet(); if(history.state?.v === "root") history.pushState({v:"app"}, ""); return; }
+  if($("#sheet").classList.contains("open")){
+    if(sheetBack){ const f = sheetBack; sheetBack = null; f(); $("#sheetPanel").scrollTop = 0; return; }
+    hideSheet(); if(history.state?.v === "root") history.pushState({v:"app"}, ""); return;
+  }
   if(cur !== 0){ go(0); history.pushState({v:"app"}, ""); return; }
   toast("한 번 더 밀면 앱이 닫힙니다");
   clearTimeout(guardTimer);
