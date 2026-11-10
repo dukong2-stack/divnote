@@ -184,8 +184,6 @@ def fetch_prices_naver():
             items = j.get("stocks") if isinstance(j, dict) else j
             if not items:
                 break
-            if page == 1 and mkt == "KOSPI":
-                log("  네이버 응답 필드:", list(items[0].keys())[:25])
             for it in items:
                 code = str(it.get("itemCode") or "").strip()
                 if len(code) != 6:
@@ -216,7 +214,8 @@ def fetch_prices():
     d, rows = fetch_prices_naver()
     log(f"주가(네이버) {d}: {len(rows)}종목")
     return d, rows
-  
+
+
 # ───────────────────────── 2. 고유번호 ─────────────────────────
 def corp_codes():
     f = CACHE / "corpcode.json"
@@ -354,6 +353,32 @@ def cashflow(corp, year, cache):
             out = {"ocf": ocf, "capex": capex or [0, 0, 0]}
             break
     cache[key] = out
+    return out
+
+
+# ───────────────────────── 6. 감사인 ─────────────────────────
+def auditor(corp, year, reprt, cache):
+    """회계감사인의 명칭 및 감사의견. 반환: {"cur": 당기(현재) 감사인}"""
+    key = f"{corp}_{year}_{reprt}"
+    if key in cache:
+        return cache[key]
+    j = dart("accnutAdtorNmNdAdtOpinion.json", {"corp_code": corp, "bsns_year": str(year), "reprt_code": reprt})
+    out = None
+    if j:
+        cur = prev = None
+        for it in j.get("list", []):
+            name = (it.get("adtor") or "").strip()
+            if not name or name == "-":
+                continue
+            period = (it.get("bsns_year") or "").replace(" ", "")
+            if "당기" in period and cur is None:
+                cur = name
+            elif "전기" in period and "전전기" not in period and prev is None:
+                prev = name
+        if cur:
+            out = {"cur": cur, "prev": prev}
+    if out is not None or reprt == "11011":
+        cache[key] = out  # 분기 보고서에서 못 찾은 경우는 다음에 다시 시도
     return out
 
 
@@ -503,6 +528,22 @@ def main():
             stage2.append(rec)
     save_cache("div", dcache); save_cache("company", ccache)
     log(f"2차(배당) 통과: {len(stage2)}종목")
+
+    # 감사인 (최근 정기보고서 → 없으면 사업보고서)
+    md0 = NOW.month * 100 + NOW.day
+    latest_rep = (NOW.year, "11014") if md0 >= 1120 else (NOW.year, "11012") if md0 >= 820 else (NOW.year, "11013") if md0 >= 520 else (Y, "11011")
+    acache = load_cache("auditor")
+    for i, rec in enumerate(stage1, 1):
+        a = auditor(rec["corp"], latest_rep[0], latest_rep[1], acache)
+        if not a and latest_rep[1] != "11011":
+            a = auditor(rec["corp"], Y, "11011", acache)
+        rec["auditor"] = (a or {}).get("cur")
+        universe_out[rec["code"]].update(a=rec["auditor"])
+        if i % 50 == 0:
+            save_cache("auditor", acache)
+            log(f"  감사인 {i}/{len(stage1)}")
+    save_cache("auditor", acache)
+    log(f"감사인 확인: {sum(1 for r in stage1 if r['auditor'])}/{len(stage1)}종목")
 
     # 업종 중앙 PER (1차 통과 기업 기준)
     sec_pers = {}
@@ -660,6 +701,7 @@ def export(r, brief=False):
         "code": r["code"], "name": r["name"], "market": r["market"], "sector": r["sector_name"],
         "price": r["price"], "mcap": r["mcap"], "score": r["score"], "cats": r["cats"],
         "yield": r1(r["cur_yield"], 2), "per": r1(r.get("per")), "dps": r["dps"][-1],
+        "auditor": r.get("auditor"),
     }
     if brief:
         return base
