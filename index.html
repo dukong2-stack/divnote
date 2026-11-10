@@ -163,6 +163,8 @@ details.snap td,details.snap th{padding:7px 14px;border-top:1px solid var(--line
 details.snap td:first-child,details.snap th:first-child{text-align:left}
 details.snap td:first-child{white-space:nowrap}
 details.snap th{font-weight:500;color:var(--muted);font-size:12px}
+.toast{position:fixed;left:50%;bottom:calc(76px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:9px 16px;border-radius:999px;font-size:13px;z-index:30;opacity:0;pointer-events:none;transition:opacity .2s}
+.toast.on{opacity:.92}
 .note{font-size:12px;color:var(--muted);margin:10px 2px}
 .scroll-x{overflow-x:auto}
 </style>
@@ -189,6 +191,7 @@ details.snap th{font-weight:500;color:var(--muted);font-size:12px}
     <button role="tab">설정</button>
   </nav>
 </div>
+<div class="toast" id="toast" role="status"></div>
 <div class="sheet" id="sheet" role="dialog" aria-modal="true"><div class="panel" id="sheetPanel"></div></div>
 
 <script>
@@ -344,12 +347,17 @@ function openDetail(code){
       <a class="btn" href="https://finance.naver.com/item/main.naver?code=${c.code}" target="_blank" rel="noopener">네이버 증권</a>
       <a class="btn" href="https://dart.fss.or.kr/dsab007/main.do?option=corp&textCrpNm=${encodeURIComponent(c.name)}" target="_blank" rel="noopener">DART 공시</a>
     </div>`;
+  if(!$("#sheet").classList.contains("open")) history.pushState({v:"sheet"}, "");
   $("#sheet").classList.add("open");
   $("#sheetPanel").scrollTop = 0;
   $("#closeSheet").onclick = closeSheet;
   const a = $("#addFromDetail"); if(a) a.onclick = () => { closeSheet(); go(1); setTimeout(() => { $("#f-stock").value = `${c.name} (${c.code})`; $("#f-qty").focus(); }, 300); };
 }
-function closeSheet(){ $("#sheet").classList.remove("open"); }
+function hideSheet(){ $("#sheet").classList.remove("open"); }
+function closeSheet(){
+  if(!$("#sheet").classList.contains("open")) return;
+  if(history.state?.v === "sheet") history.back(); else hideSheet();
+}
 $("#sheet").addEventListener("click", e => { if(e.target.id==="sheet") closeSheet(); });
 document.addEventListener("keydown", e => { if(e.key==="Escape") closeSheet(); });
 
@@ -554,6 +562,20 @@ $("#vp").addEventListener("touchend", e => {
   const dx = e.changedTouches[0].clientX - sx, dy = e.changedTouches[0].clientY - sy;
   if(Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy)*1.6) go(cur + (dx<0?1:-1));
 }, {passive:true});
+
+/* ── 뒤로가기(가장자리 밀기) 처리: 상세 닫기 → 첫 탭으로 → 한 번 더 밀면 종료 ── */
+let toastTimer;
+function toast(msg){ const t = $("#toast"); t.textContent = msg; t.classList.add("on"); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("on"), 2200); }
+history.replaceState({v:"root"}, "");
+history.pushState({v:"app"}, "");
+let guardTimer;
+window.addEventListener("popstate", () => {
+  if($("#sheet").classList.contains("open")){ hideSheet(); if(history.state?.v === "root") history.pushState({v:"app"}, ""); return; }
+  if(cur !== 0){ go(0); history.pushState({v:"app"}, ""); return; }
+  toast("한 번 더 밀면 앱이 닫힙니다");
+  clearTimeout(guardTimer);
+  guardTimer = setTimeout(() => { if(history.state?.v === "root") history.pushState({v:"app"}, ""); }, 2200);
+});
 
 if("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 load();
