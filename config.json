@@ -10,6 +10,7 @@
   "min_current_yield": 3.0,
   "payout_flag": 40,
   "disclosure_days": 120,
+  "normal_tax_rate": 22,
   "top_n": 30,
   "weights": {
     "value": 30,

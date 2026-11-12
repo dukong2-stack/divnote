@@ -180,6 +180,7 @@ table.kv td small.up{color:var(--up)}table.kv td small.down{color:var(--down)}
 .disc a{color:var(--ink);text-decoration:none}
 .disc small{display:block;color:var(--muted);font-size:11.5px}
 .fl{font-size:11px;font-weight:600;border-radius:4px;padding:0 5px;margin-left:5px;white-space:nowrap}
+.fl.info{color:var(--slate);background:var(--sunk)}
 .fl.bad{color:var(--warn);background:var(--warn-bg)}.fl.good{color:var(--celadon);background:var(--ok-bg)}
 .memo textarea{width:100%;min-height:110px;border:1px solid var(--line);background:var(--bg);border-radius:var(--radius-s);padding:10px;font:inherit;font-size:14px;resize:vertical;color:var(--ink)}
 .memo ul{list-style:none;margin:10px 0 0;padding:0}
@@ -279,8 +280,8 @@ function band(c, big=false){
   const span = Math.max(max - min, .5), pad = span*.08;
   const pos = v => Math.max(0, Math.min(100, (v - (min - pad)) / (span + 2*pad) * 100));
   const over = now > hi;
-  return `<div class="band${big?" big":""}" aria-label="현재 배당률 ${pct(now)}, 5년 범위 ${pct(lo)}~${pct(hi)}, 평균 ${pct(avg)}">
-    <div class="yv">${pct(now)}<small>${over?"5년 최고 위":"현재 배당률"}</small></div>
+  return `<div class="band${big?" big":""}" aria-label="${c.exp_why?"기대":"현재"} 배당률 ${pct(now)}, 5년 범위 ${pct(lo)}~${pct(hi)}, 평균 ${pct(avg)}">
+    <div class="yv">${pct(now)}<small>${over?"5년 최고 위":(c.exp_why?"기대 배당률":"현재 배당률")}</small></div>
     <div class="track"><div class="rail" style="left:${pos(lo)}%;right:${100-pos(hi)}%"></div>
       <div class="avg" style="left:${pos(avg)}%"></div>
       <div class="now${over?" over":""}" style="left:${pos(now)}%"></div>
@@ -305,25 +306,27 @@ function estBlock(c){
     <tr><td>${y}년 ${e.label} 누적 <small>전년 같은 기간 ${eok(v.cum_prev)}</small></td><td>${eok(v.cum)} <small class="${cls(v.yoy)}">${sgn(v.yoy)}</small></td></tr>
     ${v.q!=null?`<tr><td>${qn} 3개월 <small>전년 같은 분기 대비</small></td><td>${eok(v.q)} <small class="${cls(v.q_yoy)}">${sgn(v.q_yoy)}</small></td></tr>`:""}
     ${v.vs_prev_half!=null?`<tr><td>직전 반기(${prevY}년 하반기 ${eok(v.prev_half)}) 대비</td><td class="${cls(v.vs_prev_half)}">${sgn(v.vs_prev_half)}</td></tr>`:""}
-    <tr><td>${y}년 연간 추정 <small>계절성 반영${v.simple!=null?`, 단순 연환산 ${eok(v.simple)}`:""}</small></td><td><b>${eok(v.seasonal ?? v.simple)}</b> <small class="${cls(v.vs_last)}">${sgn(v.vs_last)}</small></td></tr>
+    ${v.seasonal!=null?`<tr><td>추정 ① 계절성 반영 <small>${prevY}년 연간 × 누적 증가율</small></td><td>${eok(v.seasonal)}</td></tr>`:""}
+    ${v.runrate!=null?`<tr><td>추정 ② 최근 분기 기준 <small>누적 + ${qn} 실적 × 남은 ${4-e.nq}개 분기</small></td><td>${eok(v.runrate)}</td></tr>`:""}
+    <tr><td><b>${y}년 적용 추정</b> <small>${v.seasonal!=null&&v.runrate!=null?"①② 중 낮은 값, ":""}${esc(v.method||"")}</small></td><td><b>${eok(v.base ?? v.seasonal ?? v.simple)}</b> <small class="${cls(v.vs_last)}">${sgn(v.vs_last)}</small></td></tr>
   </table>`; };
   return `<div class="block est"><h4>${y}년 실적 추정 <small style="font-weight:400;color:var(--muted)">${e.label} 공시 기준</small></h4>
     ${part("op","영업이익")}
     ${["rev","ni"].some(k=>e[k]) ? `<h5>매출액·순이익</h5><table class="kv">${[["rev","매출액"],["ni","순이익"]].filter(([k])=>e[k]).map(([k,t]) => { const v = e[k];
-      return `<tr><td>${t} <small>${e.label} 누적 ${eok(v.cum)}</small> <small class="${cls(v.yoy)}">${sgn(v.yoy)}</small></td><td>${eok(v.seasonal ?? v.simple)} 추정 <small class="${cls(v.vs_last)}">${sgn(v.vs_last)}</small></td></tr>`; }).join("")}</table>`:""}
+      return `<tr><td>${t} <small>${e.label} 누적 ${eok(v.cum)}</small> <small class="${cls(v.yoy)}">${sgn(v.yoy)}</small></td><td>${eok(v.base ?? v.seasonal ?? v.simple)} 추정 <small class="${cls(v.vs_last)}">${sgn(v.vs_last)}</small></td></tr>`; }).join("")}</table>`:""}
     ${e.eps_fwd?`<h5>주가 지표</h5><table class="kv">
       <tr><td>주당순이익 <small>${prevY}년 ${won(c.series.eps[5])}원</small></td><td>${won(e.eps_fwd)}원 추정</td></tr>
       <tr><td>PER <small>${prevY}년 기준 ${c.per??"–"}배</small></td><td>${e.per_fwd??"–"}배 추정</td></tr>
-      ${e.payout_fwd!=null?`<tr><td>배당성향 <small>현재 주당배당금 유지 시</small></td><td>${e.payout_fwd}% 추정</td></tr>`:""}
+      ${e.payout_fwd!=null?`<tr><td>배당성향 <small>${c.exp_why?"기대 주당배당금 기준":"현재 주당배당금 유지 시"}</small></td><td>${e.payout_fwd}% 추정</td></tr>`:""}
     </table>`:""}
-    <p class="note" style="margin:10px 0 0">계절성 반영 추정 = ${prevY}년 연간 × (올해 누적 ÷ 전년 같은 기간 누적). 하반기 비중이 큰 업종도 왜곡이 적도록 단순 연환산 대신 이 값을 기준으로 씁니다.</p></div>`;
+    <p class="note" style="margin:10px 0 0">하반기 비중이 큰 회사는 ①이, 실적이 분기마다 꺾이는 회사는 ②가 현실에 가깝습니다. 낙관을 피하려고 둘 중 낮은 값을 점수와 추정 PER에 씁니다.</p></div>`;
 }
 function discBlock(c){
   const d = c.disc || []; if(!d.length) return "";
   const fmt = x => x ? `${x.slice(2,4)}.${x.slice(4,6)}.${x.slice(6,8)}` : "";
-  return `<div class="block"><h4>최근 공시 <small style="font-weight:400;color:var(--muted)">${L.config.disclosure_days||120}일, ${d.length}건</small></h4><ul class="disc">${
+  return `<div class="block"><h4>최근 공시 <small style="font-weight:400;color:var(--muted)">${L.config.disclosure_days||120}일, ${d.length}건 — 주황 주의, 회색 참고, 초록 긍정</small></h4><ul class="disc">${
     d.slice(0,15).map(x => `<li><a href="https://dart.fss.or.kr/dsaf001/main.do?rcpNo=${x.no}" target="_blank" rel="noopener">${esc(x.t)}</a>${
-      (x.f||[]).map(f=>`<span class="fl bad">${esc(f)}</span>`).join("")}${(x.g||[]).map(f=>`<span class="fl good">${esc(f)}</span>`).join("")}<small>${fmt(x.d)}, ${esc(x.by||"")}</small></li>`).join("")}</ul>
+      (x.f||[]).map(f=>`<span class="fl bad">${esc(f)}</span>`).join("")}${(x.g||[]).map(f=>`<span class="fl good">${esc(f)}</span>`).join("")}${(x.i||[]).map(f=>`<span class="fl info">${esc(f)}</span>`).join("")}${x.amt||x.ratio!=null?`<small style="color:var(--ink)">${x.amt?`${Math.round(x.amt).toLocaleString("ko-KR")}억`:""}${x.ratio!=null?`${x.amt?", ":""}자산총액의 ${x.ratio}%`:""}</small>`:""}<small>${fmt(x.d)}, ${esc(x.by||"")}</small></li>`).join("")}</ul>
     ${d.length>15?`<p class="note" style="margin:6px 0 0">최근 15건만 표시. 나머지는 DART에서 확인하세요.</p>`:""}</div>`;
 }
 function analysisPrompt(c){
@@ -332,10 +335,13 @@ function analysisPrompt(c){
     `${c.name}(${c.code}) 투자 판단을 위해 추가 분석해 줘.`,
     ``,
     `[배당가치 노트 수치, 주가 ${fmtDate(L.price_date)} 기준]`,
-    `현재가 ${won(c.price)}원, 시가총액 ${eokTxt(c.mcap)}, 업종 ${c.sector}, 현재 감사인 ${c.auditor||"확인 안 됨"}`,
-    `현재 배당률 ${pct(c.yield)} (5년 평균 ${pct(c.yld_avg)}), 주당배당금 ${won(c.dps)}원, 배당성향 ${pct(c.payout,0)}, 연속 배당 ${c.consec}년`,
-    `PER ${c.per??"–"}배 (올해 추정 ${c.per_fwd??"–"}배), PBR ${c.pbr??"–"}배, 3년 평균 ROE ${pct(c.roe3)}`,
-    o.cum!=null ? `영업이익: ${L.fiscal_year}년 ${eok(o.last)}, ${e.year}년 ${e.label} 누적 ${eok(o.cum)} (전년 같은 기간 대비 ${sgn(o.yoy)}), 올해 추정 ${eok(o.seasonal ?? o.simple)} (전년 대비 ${sgn(o.vs_last)})` : null,
+    `현재가 ${won(c.price)}원, 시가총액 ${eokTxt(c.mcap)}, 업종 ${c.sector}`,
+    c.auditor ? `현재 감사인: ${c.auditor} (${c.auditor_src||"최근 정기보고서"} 기준, 앱에서 확인함 — 따로 조사하지 않아도 됨)` : `현재 감사인: 앱에서 확인 안 됨 — 최근 분·반기 검토보고서 기준으로 확인해 줘`,
+    c.exp_why ? `배당: ${L.fiscal_year}년 주당배당금 ${won(c.dps)}원 (표시 배당률 ${pct(c.yield_shown)}), 앱의 기대 주당배당금 ${won(c.dps_exp)}원 (기대 배당률 ${pct(c.yield)}, 근거: ${c.exp_why}), 5년 평균 배당률 ${pct(c.yld_avg)}, 배당성향 ${pct(c.payout,0)}, 연속 배당 ${c.consec}년`
+      : `배당: 현재 배당률 ${pct(c.yield)} (5년 평균 ${pct(c.yld_avg)}), ${L.fiscal_year}년 주당배당금 ${won(c.dps)}원, 배당성향 ${pct(c.payout,0)}, 연속 배당 ${c.consec}년`,
+    `${c.per_norm?`PER ${c.per_raw}배(순이익 기준, 일회성 이익 포함) / 정상화 PER ${c.per_norm}배`:`PER ${c.per??"–"}배`} (올해 추정 ${c.per_fwd??"–"}배), PBR ${c.pbr??"–"}배, 3년 평균 ROE ${pct(c.roe3)}`,
+    o.cum!=null ? `영업이익(${e.year}년 ${e.label} 기준): ${L.fiscal_year}년 연간 ${eok(o.last)}, ${e.year}년 누적 ${eok(o.cum)} (전년 같은 기간 대비 ${sgn(o.yoy)})${o.q!=null?`, 최근 분기 3개월 ${eok(o.q)} (전년 같은 분기 대비 ${sgn(o.q_yoy)})`:""}, 앱 연간 추정 ${eok(o.base ?? o.seasonal ?? o.simple)} (${o.method||""}, 계절성 ${eok(o.seasonal)} / 최근 분기 기준 ${eok(o.runrate)} 중 낮은 값, 전년 대비 ${sgn(o.vs_last)})` : null,
+    e.eps_fwd ? `추정 PER ${c.per_fwd??"–"}배는 위 추정 순이익과 ${fmtDate(L.price_date)} 종가로 앱이 계산한 값` : null,
     `선정 이유: ${c.reasons.join(" / ") || "–"}`,
     `확인할 점: ${c.cautions.join(" / ") || "없음"}`,
     (c.disc||[]).length ? `최근 공시: ${(c.disc||[]).slice(0,8).map(x=>`${x.d} ${x.t}`).join(" / ")}` : null,
@@ -343,13 +349,14 @@ function analysisPrompt(c){
     ``,
     `웹에서 최근 공시, 기사, 증권사 리포트를 찾아보고 아래를 정리해 줘.`,
     `1. 최근 실적 흐름과 올해·내년 실적 전망 (증권사 컨센서스가 있으면 위 추정치와 비교)`,
-    `2. 배당 정책 변화 (배당 확대·축소, 분기배당, 자사주, 밸류업 계획)`,
+    `2. 배당 정책 변화 (배당 확대·축소, 분기배당, 자사주, 밸류업 계획)와 이를 근거로 한 올해 기대 주당배당금·기대 배당률 추정 (앱 기대치와 비교)`,
     `3. 최근 공시와 기사에서 나온 특이사항 (지배구조, 소송, 증자·사채, 대주주 지분 변동 등)`,
     `4. 증권사 리포트의 주요 논점과 목표주가 범위`,
     `5. 주가가 싸게 거래되는 이유로 볼 만한 위험 요인`,
     `6. 위 내용을 종합한 투자 판단 체크포인트`,
     `7. 종합 의견: 배당과 시세차익을 함께 노리는 투자 논리가 성립하는지에 대한 너의 시각(긍정적/중립/부정적)과 핵심 근거, 반대 근거, 매수를 검토하기 전에 확인할 조건${(MEMO[c.code]||[]).length?", 지난 메모 이후 달라진 점":""}`,
-    `8. 마지막에 메모에 붙여넣을 3줄 요약 (시각, 핵심 이유, 다음에 확인할 것)`,
+    `8. 앱 수치 검증: 위 앱 수치 중 틀렸거나 시점이 지난 것, 공시 분류가 잘못된 것이 있으면 따로 목록으로 정리 (앱 개선용)`,
+    `9. 마지막에 메모에 붙여넣을 3줄 요약 (시각, 핵심 이유, 다음에 확인할 것)`,
   ];
   return lines.filter(x => x !== null).join("\n");
 }
@@ -444,9 +451,11 @@ function openLookup(code){
     ${o ? `<div class="block">${segbar(o.cats)}<div class="cats" style="margin-top:10px">${Object.entries(CAT).map(([k,[t,col]]) => `<div class="cat"><span>${t}</span><span class="t"><b style="width:${o.cats[k]}%;background:${col}"></b></span><em>${o.cats[k]}</em></div>`).join("")}</div></div>`:""}
     ${u ? `<div class="block"><h4>참고 지표 <small style="font-weight:400;color:var(--muted)">주가 ${fmtDate(L.price_date)} 종가, ${L.fiscal_year}년 사업보고서 기준</small></h4><table class="kv">
       ${u.s?`<tr><td>업종</td><td>${esc(u.s)}</td></tr>`:""}
-      ${u.y!=null?`<tr><td>현재 배당률</td><td>${pct(u.y,2)}</td></tr>`:""}
+      ${u.ye!=null && u.y!=null && Math.abs(u.ye-u.y)>0.05 ? `<tr><td>표시 배당률 <small>${L.fiscal_year}년 배당 기준</small></td><td>${pct(u.y,2)}</td></tr><tr><td>기대 배당률 <small>일회성 배당·이익 감소 반영</small></td><td>${pct(u.ye,2)}</td></tr>`
+        : (u.y!=null?`<tr><td>현재 배당률</td><td>${pct(u.y,2)}</td></tr>`:"")}
       ${u.dps!=null?`<tr><td>주당배당금 <small>${L.fiscal_year}년</small></td><td>${won(u.dps)}원</td></tr>`:""}
-      ${u.per!=null?`<tr><td>PER <small>${L.fiscal_year}년 순이익 기준</small></td><td>${u.per}배</td></tr>`:""}
+      ${u.pr!=null?`<tr><td>PER <small>${L.fiscal_year}년 순이익 기준, 일회성 이익 포함</small></td><td>${u.pr}배</td></tr>`:""}
+      ${u.per!=null?`<tr><td>${u.pr!=null?"정상화 PER":"PER"} <small>${u.pr!=null?"영업이익 기준":L.fiscal_year+"년 순이익 기준"}</small></td><td>${u.per}배</td></tr>`:""}
       ${u.a?`<tr><td>현재 감사인</td><td>${esc(u.a)}</td></tr>`:""}
     </table></div>` : ""}
     ${SNAP.length ? `<div class="block"><h4>순위 변화 <small style="font-weight:400;color:var(--muted)">매월 첫 수집 기준</small></h4>${rankHistory(code)}</div>`:""}
@@ -526,7 +535,7 @@ function renderCand(){
       <button class="row" data-code="${c.code}">
         <span class="rk">${L.candidates.indexOf(c)+1}</span>
         <span><span class="nm">${esc(c.name)}</span>${bm[c.code]?`<span class="bd s${bm[c.code].stage}">바닥${CIRC[bm[c.code].stage]||""}</span>`:""}${held.has(c.code)?`<span class="held">보유</span>`:""}${MEMO[c.code]?`<span class="mm">메모</span>`:""}${c.cautions.length?`<span class="flag">주의 ${c.cautions.length}</span>`:""}
-          <span class="meta" style="display:block">${esc(c.sector)}, ${c.market==="KOSPI"?"코스피":"코스닥"}, PER ${c.per??"–"}배, 감사 ${esc(firm(c.auditor))}</span></span>
+          <span class="meta" style="display:block">${esc(c.sector)}, ${c.market==="KOSPI"?"코스피":"코스닥"}, ${c.per_norm?"정상화 ":""}PER ${c.per??"–"}배, 감사 ${esc(firm(c.auditor))}</span></span>
         <span class="sc">${Math.round(c.score)}<span>점</span></span>
         <span class="body">${segbar(c.cats)}${band(c)}${c.reasons[0]?`<span class="why">${esc(c.reasons[0])}</span>`:""}</span>
       </button>`).join("") || `<div class="empty"><b>조건에 맞는 종목이 없습니다</b>필터를 전체로 바꿔 보세요.</div>`}</div>
@@ -572,18 +581,20 @@ function openDetail(code, fromList=false){
       <div class="cats">${Object.entries(CAT).map(([k,[t,col]]) => `<div class="cat"><span>${t}</span><span class="t"><b style="width:${c.cats[k]}%;background:${col}"></b></span><em>${c.cats[k]}</em></div>`).join("")}</div></div></div>
     ${SNAP.length ? `<div class="block" style="padding:10px 16px"><span style="font-size:13px;color:var(--muted)">순위 변화</span>${rankHistory(c.code)}</div>`:""}
     <div class="block"><h4>배당률 밴드</h4>${band(c,true)}
-      <p class="note" style="margin:16px 0 0">${L.fiscal_year}년 주당배당금 ${won(c.dps)}원${c.split_adj?"(현재 주식수 기준 환산)":""} ÷ ${fmtDate(L.price_date)} 종가. 5년 평균 대비 ${c.yld_ratio?`${c.yld_ratio.toFixed(2)}배`:"–"} — 1보다 클수록 배당 기준으로 싸게 거래되는 상태입니다.</p></div>
+      <p class="note" style="margin:16px 0 0">${c.exp_why ? `기대 주당배당금 ${won(c.dps_exp)}원 ÷ ${fmtDate(L.price_date)} 종가. ${L.fiscal_year}년 실제 배당 ${won(c.dps)}원 기준 표시 배당률은 ${pct(c.yield_shown)}이지만, ${esc(c.exp_why)}.` : `${L.fiscal_year}년 주당배당금 ${won(c.dps)}원${c.split_adj?"(현재 주식수 기준 환산)":""} ÷ ${fmtDate(L.price_date)} 종가.`} 5년 평균 대비 ${c.yld_ratio?`${c.yld_ratio.toFixed(2)}배`:"–"} — 1보다 클수록 배당 기준으로 싸게 거래되는 상태입니다.</p></div>
     <div class="block"><h4>선정 이유</h4><ul class="pts">${c.reasons.map(r => `<li>${esc(r)}</li>`).join("") || "<li>세부 지표가 고르게 상위권</li>"}</ul></div>
     ${estBlock(c)}
     ${c.cautions.length ? `<div class="block"><h4>확인할 점</h4><ul class="pts warn">${c.cautions.map(r => `<li>${esc(r)}</li>`).join("")}</ul></div>`:""}
     <div class="block"><h4>주요 지표</h4>
       <p class="note" style="margin:-4px 0 6px">주가는 ${fmtDate(L.price_date)} 종가 기준입니다. 각 항목 아래에 재무 수치의 기준 시점을 적었습니다.</p><table class="kv">
       <tr><td>현재 감사인 <small>${esc(c.auditor_src||"최근 정기보고서")} 기준</small></td><td>${esc(c.auditor||"확인 안 됨")}</td></tr>
-      <tr><td>PER <small>${L.fiscal_year}년 순이익 기준, 업종 중앙 ${c.sec_per??"–"}배</small></td><td>${c.per??"–"}배</td></tr>
-      ${c.per_fwd!=null?`<tr><td>PER <small>${c.est?.year??""}년 추정 순이익 기준</small></td><td>${c.per_fwd}배</td></tr>`:""}
+      ${c.per_norm ? `<tr><td>PER <small>${L.fiscal_year}년 순이익 기준, 일회성 이익 포함</small></td><td>${c.per_raw??"–"}배</td></tr>
+      <tr><td>정상화 PER <small>${L.fiscal_year}년 영업이익 × (1 − 법인세율 ${L.config.normal_tax_rate??22}%) 기준, 점수 반영, 업종 중앙 ${c.sec_per??"–"}배</small></td><td>${c.per_norm??c.per??"–"}배</td></tr>`
+      : `<tr><td>PER <small>${L.fiscal_year}년 순이익 기준, 업종 중앙 ${c.sec_per??"–"}배</small></td><td>${c.per??"–"}배</td></tr>`}
+      ${c.per_fwd!=null?`<tr><td>PER <small>${c.est?.year??""}년 추정 순이익 기준${c.est?.one_off?", 영업이익으로 정상화":""}</small></td><td>${c.per_fwd}배</td></tr>`:""}
       <tr><td>PBR <small>${esc(c.bs_src||L.fiscal_year+"년 말")} 자본 기준</small></td><td>${c.pbr??"–"}배</td></tr>
       <tr><td>PEG <small>${L.fiscal_year}년 PER ÷ 3년 EPS 성장률</small></td><td>${c.peg??"–"}</td></tr>
-      <tr><td>평균 ROE <small>${L.fiscal_year-2}~${L.fiscal_year}년</small></td><td>${pct(c.roe3)}</td></tr>
+      <tr><td>평균 ROE <small>${L.fiscal_year-2}~${L.fiscal_year}년${c.roe3_raw!=null?`, 일회성 이익 제외 (포함 시 ${pct(c.roe3_raw)})`:""}</small></td><td>${pct(c.roe3)}</td></tr>
       <tr><td>평균 영업이익률 <small>${L.fiscal_year-2}~${L.fiscal_year}년</small></td><td>${pct(c.opm)}</td></tr>
       <tr><td>부채비율 <small>${esc(c.bs_src||L.fiscal_year+"년 말")} 기준</small></td><td>${c.debt!=null?pct(c.debt,0):"해당 없음"}</td></tr>
       <tr><td>매출 / EPS 연평균 성장 <small>${L.fiscal_year-3}→${L.fiscal_year}년</small></td><td>${pct(c.rev_cagr)} / ${pct(c.eps_cagr)}</td></tr>
@@ -798,7 +809,7 @@ function renderSet(){
       <tr><td>연속 배당</td><td>${C.min_consec_div_years}년 이상</td></tr>
       <tr><td>5년 내 배당 삭감</td><td>${C.max_dps_cuts_5y}회 이하</td></tr>
       <tr><td>배당성향</td><td>${C.max_payout}% 이하</td></tr>
-      <tr><td>현재 배당률</td><td>${C.min_current_yield}% 이상</td></tr>
+      <tr><td>기대 배당률</td><td>${C.min_current_yield}% 이상</td></tr>
       <tr><td>점수 가중치</td><td>가치 ${C.weights.value}, 배당 ${C.weights.dividend}, 퀄리티 ${C.weights.quality}, 성장 ${C.weights.growth}</td></tr>
     </table></div><p class="note">기준은 저장소의 config.json에서 바꿉니다. 바꾼 뒤 Actions에서 collect를 실행하면 반영됩니다.</p>
     <p class="note">마지막 수집 ${esc(L.updated)}, 사업연도 ${L.fiscal_year}, 최근 분기 ${esc(L.quarter||"없음")}, 1차 통과 기업 PER 중앙값 ${L.market_per??"–"}배.</p>`:""}
