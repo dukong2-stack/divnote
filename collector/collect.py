@@ -201,7 +201,10 @@ def fetch_prices_naver():
             time.sleep(0.2)
     if len(rows) < 1000:
         sys.exit(f"[중단] 네이버 시세가 {len(rows)}종목만 수집되었습니다. 이 로그를 보내 주세요.")
-    return NOW.strftime("%Y%m%d"), rows
+    d = NOW - dt.timedelta(days=1) if NOW.hour < 16 else NOW  # 장 마감 전 실행이면 직전 거래일 종가
+    while d.weekday() >= 5:
+        d -= dt.timedelta(days=1)
+    return d.strftime("%Y%m%d"), rows
 
 
 def fetch_prices():
@@ -358,6 +361,27 @@ def cashflow(corp, year, cache):
     return out
 
 
+def quarter_candidates():
+    md = NOW.month * 100 + NOW.day
+    return [x for x in ((NOW.year, "11014", "3분기보고서", 3, 1115), (NOW.year, "11012", "반기보고서", 2, 815),
+                        (NOW.year, "11013", "1분기보고서", 1, 516)) if md >= x[4]]
+
+
+def shares_total(corp, year, cache):
+    """사업보고서 '주식의 총수 현황'의 보통주 발행주식총수"""
+    key = f"{corp}_{year}"
+    if key in cache:
+        return cache[key]
+    j = dart("stockTotqySttus.json", {"corp_code": corp, "bsns_year": str(year), "reprt_code": "11011"})
+    out = None
+    for it in (j or {}).get("list", []):
+        if (it.get("se") or "").replace(" ", "") == "보통주":
+            out = num(it.get("istc_totqy"))
+            break
+    cache[key] = out
+    return out
+
+
 # ───────────────────────── 6. 감사인 ─────────────────────────
 def auditor(corp, year, reprt, cache):
     """회계감사인의 명칭 및 감사의견. 반환: {"cur": 당기(현재) 감사인}"""
@@ -368,15 +392,19 @@ def auditor(corp, year, reprt, cache):
     out = None
     if j:
         cur = prev = None
-        for it in j.get("list", []):
-            name = (it.get("adtor") or "").strip()
-            if not name or name == "-":
-                continue
+        rows = [it for it in j.get("list", []) if (it.get("adtor") or "").strip() not in ("", "-")]
+        for it in rows:
             period = (it.get("bsns_year") or "").replace(" ", "")
-            if "당기" in period and cur is None:
-                cur = name
-            elif "전기" in period and "전전기" not in period and prev is None:
-                prev = name
+            if "당기" in period:
+                cur = cur or it["adtor"].strip()
+            elif "전기" in period and "전전기" not in period:
+                prev = prev or it["adtor"].strip()
+        if cur is None:  # '제57기 반기'처럼 당기 표시가 없으면 전기·전전기가 아닌 첫 행(당기)을 사용
+            for it in rows:
+                period = (it.get("bsns_year") or "").replace(" ", "")
+                if "전기" not in period:
+                    cur = it["adtor"].strip()
+                    break
         if cur:
             out = {"cur": cur, "prev": prev}
     if out is not None or reprt == "11011":
@@ -436,7 +464,9 @@ def main():
         if it.get("mrktCtg") not in ("KOSPI", "KOSDAQ"):
             continue
         code = it.get("srtnCd", "").lstrip("A")
-        prices[code] = [it.get("itmsNm"), num(it.get("clpr")), r1((num(it.get("mrktTotAmt")) or 0) / 1e8, 0), it.get("mrktCtg")]
+        pr, mv = num(it.get("clpr")), num(it.get("mrktTotAmt"))
+        sh = num(it.get("lstgStCnt")) or (round(mv / pr) if mv and pr else None)
+        prices[code] = [it.get("itmsNm"), pr, r1((mv or 0) / 1e8, 0), it.get("mrktCtg"), sh]
     write_json(DATA / "prices.json", {"date": bas_dt, "p": prices})
 
     min_mcap = CFG["min_mcap_eok"]
@@ -454,7 +484,7 @@ def main():
     fb = multi_accounts(corps, Y - 3, "11011")
 
     universe_out, stage1 = {}, []
-    for code, (name, price, mcap, mkt) in uni.items():
+    for code, (name, price, mcap, mkt, shares_now) in uni.items():
         corp = cmap[code]
         rev = series(fa.get(corp), fb.get(corp), "rev")
         op = series(fa.get(corp), fb.get(corp), "op")
@@ -479,7 +509,7 @@ def main():
         roe3 = mean(roes)
         if roe3 is not None and roe3 < CFG["min_roe_3y"]:
             fails.append(f"3년 평균 ROE {roe3:.1f}% (기준 {CFG['min_roe_3y']}%)")
-        rec = dict(code=code, corp=corp, name=name, market=mkt, price=price, mcap=mcap,
+        rec = dict(code=code, corp=corp, name=name, market=mkt, price=price, mcap=mcap, shares_now=shares_now,
                    rev=rev, op=op, ni=ni, eq=eq, liab=liab, roe3=roe3, fs=(fa.get(corp) or {}).get("fs"))
         universe_out[code] = {"n": name, "m": mkt, "f": fails}
         if not fails:
@@ -487,18 +517,32 @@ def main():
     log(f"1차(이익·ROE) 통과: {len(stage1)}종목")
 
     # 4) 배당·업종
-    dcache, ccache = load_cache("div"), load_cache("company")
+    dcache, ccache, scache = load_cache("div"), load_cache("company"), load_cache("shares")
     stage2 = []
     for i, rec in enumerate(stage1, 1):
         da = dividends(rec["corp"], Y, dcache)
         db = dividends(rec["corp"], Y - 3, dcache)
         info = company(rec["corp"], ccache)
         if i % 50 == 0:
-            save_cache("div", dcache); save_cache("company", ccache)
+            save_cache("div", dcache); save_cache("company", ccache); save_cache("shares", scache)
             log(f"  배당·업종 {i}/{len(stage1)}")
         def s6(k):
             return [db[k][2], db[k][1], db[k][0], da[k][2], da[k][1], da[k][0]]
         rec.update(dps=s6("dps"), yld=s6("yld"), payout=s6("payout"), eps=s6("eps"), divtot=s6("total"))
+        # 주식수 변동 보정: 현재 상장주식수 ÷ 각 사업보고서 기말 발행주식수
+        sa, sb = shares_total(rec["corp"], Y, scache), shares_total(rec["corp"], Y - 3, scache)
+        now_sh = rec.get("shares_now")
+        ra = now_sh / sa if now_sh and sa else None
+        rb = now_sh / sb if now_sh and sb else None
+        split = lambda r: r if r and (r >= 1.4 or r <= 0.7) else None  # 액면분할·병합·무상증자 수준의 변동
+        ka, kb = split(ra), split(rb)
+        if ka or kb:
+            for key in ("dps", "eps"):
+                v = rec[key]
+                rec[key] = [(x / kb if kb and x is not None else x) for x in v[:3]] + [(x / ka if ka and x is not None else x) for x in v[3:]]
+        rec["share_ratio"] = ra
+        rec["split_adj"] = ka
+        rec["shares_fy"] = sa
         ksic = (info.get("ksic") or "")[:2]
         rec["sector"], rec["sector_name"] = ksic, SECTORS.get(ksic, "기타")
         dps = rec["dps"]
@@ -523,28 +567,36 @@ def main():
             fails.append(f"현재 배당률 {cur_yield or 0:.1f}% (기준 {CFG['min_current_yield']}%)")
         # PER (지배주주 EPS 우선)
         eps = rec["eps"][-1]
-        per = rec["price"] / eps if eps and eps > 0 else (rec["mcap"] * 1e8 / rec["ni"][-1] if rec["ni"][-1] and rec["ni"][-1] > 0 else None)
+        if eps and eps > 0 and rec.get("shares_now"):
+            per = rec["price"] / eps  # eps는 위에서 현재 주식수 기준으로 보정됨
+            if not rec.get("split_adj") and rec.get("shares_fy"):
+                per = rec["mcap"] * 1e8 / (eps * rec["shares_fy"])  # 증자·소각 등 소폭 변동은 시가총액 기준으로
+        else:
+            per = rec["price"] / eps if eps and eps > 0 else (rec["mcap"] * 1e8 / rec["ni"][-1] if rec["ni"][-1] and rec["ni"][-1] > 0 else None)
         rec["per"] = per
-        universe_out[rec["code"]].update(f=fails, s=rec["sector_name"], y=r1(cur_yield, 2), per=r1(per), dps=dps[-1])
+        universe_out[rec["code"]].update(f=fails, s=rec["sector_name"], y=r1(cur_yield, 2), per=r1(per), dps=r1(dps[-1], 1))
         if not fails:
             stage2.append(rec)
-    save_cache("div", dcache); save_cache("company", ccache)
+    save_cache("div", dcache); save_cache("company", ccache); save_cache("shares", scache)
     log(f"2차(배당) 통과: {len(stage2)}종목")
 
-    # 감사인 (최근 정기보고서 → 없으면 사업보고서)
-    md0 = NOW.month * 100 + NOW.day
-    latest_rep = (NOW.year, "11014") if md0 >= 1120 else (NOW.year, "11012") if md0 >= 820 else (NOW.year, "11013") if md0 >= 520 else (Y, "11011")
-    acache = load_cache("auditor")
+    # 감사인: 올해 가장 최근 분·반기보고서의 당기 감사인 → 없으면 직전 보고서 → 사업보고서
+    acache = load_cache("auditor2")
+    reps = [(y, rc, lb) for (y, rc, lb, _, _) in quarter_candidates()] + [(Y, "11011", "사업보고서")]
     for i, rec in enumerate(stage1, 1):
-        a = auditor(rec["corp"], latest_rep[0], latest_rep[1], acache)
-        if not a and latest_rep[1] != "11011":
-            a = auditor(rec["corp"], Y, "11011", acache)
+        a, src = None, None
+        for y, rc, lb in reps:
+            a = auditor(rec["corp"], y, rc, acache)
+            if a:
+                src = f"{y}년 {lb}"
+                break
         rec["auditor"] = (a or {}).get("cur")
+        rec["auditor_src"] = src
         universe_out[rec["code"]].update(a=rec["auditor"])
         if i % 50 == 0:
-            save_cache("auditor", acache)
+            save_cache("auditor2", acache)
             log(f"  감사인 {i}/{len(stage1)}")
-    save_cache("auditor", acache)
+    save_cache("auditor2", acache)
     log(f"감사인 확인: {sum(1 for r in stage1 if r['auditor'])}/{len(stage1)}종목")
 
     # 업종 중앙 PER (1차 통과 기업 기준)
@@ -564,8 +616,7 @@ def main():
             save_cache("cashflow", fcache)
     save_cache("cashflow", fcache)
 
-    md = NOW.month * 100 + NOW.day
-    qcands = [x for x in ((NOW.year, "11014", "3분기", 3, 1115), (NOW.year, "11012", "반기", 2, 815), (NOW.year, "11013", "1분기", 1, 516)) if md >= x[4]]
+    qcands = [(y, rc, lb.replace("보고서", ""), n, m) for (y, rc, lb, n, m) in quarter_candidates()]
     qsets = [(qc, multi_accounts([r["corp"] for r in stage2], qc[0], qc[1])) for qc in qcands] if stage2 else []
     q = qcands[0] if qcands else None
 
@@ -578,6 +629,7 @@ def main():
         rev, op, ni, eq, liab, eps, dps, yld = (rec[k] for k in ("rev", "op", "ni", "eq", "liab", "eps", "dps", "yld"))
         fin = rec["sector"] in FINANCIAL
         rec["pbr"] = rec["mcap"] * 1e8 / eq[-1] if eq[-1] and eq[-1] > 0 else None
+        rec["bs_src"] = f"{Y}년 말"
         rec["rev_cagr"] = cagr(rev[2], rev[5], 3)
         rec["eps_cagr"] = cagr(eps[2], eps[5], 3) if eps[2] and eps[5] else cagr(ni[2], ni[5], 3)
         rec["dps_cagr"] = cagr(dps[2], dps[5], 3)
@@ -614,6 +666,13 @@ def main():
         rec["q_op_yoy"] = (qd[0] / qd[1] - 1) if qd and qd[0] is not None and qd[1] and qd[1] > 0 else None
         rec["q_label"] = qc[2] if qc else (q[2] if q else None)
         rec["est"] = estimate(rec, qc, qrec, Y) if qc else None
+        qeq = ((qrec or {}).get("equity") or [None])[0]
+        qli = ((qrec or {}).get("liab") or [None])[0]
+        if qeq and qeq > 0:
+            rec["pbr"] = rec["mcap"] * 1e8 / qeq
+            rec["bs_src"] = f"{qc[0]}년 {qc[2]}말"
+            if not fin and qli is not None:
+                rec["debt"] = qli / qeq * 100
         if rec["est"] and rec["est"].get("per_fwd"):
             rec["per_fwd"] = rec["est"]["per_fwd"]
         p = rec["payout"][-1]
@@ -632,6 +691,7 @@ def main():
         cats = {k: round(100 * sum(v[i] for v in vs) / len(vs)) for k, vs in parts.items()}
         rec["cats"] = cats
         rec["score"] = round(sum(cats[k] * W[k] for k in W) / wsum, 1)
+        rec["fiscal_label"] = f"{Y}년"
         rec["reasons"], rec["cautions"] = explain(rec)
 
     stage2.sort(key=lambda r: -r["score"])
@@ -697,6 +757,8 @@ def estimate(rec, qc, qrec, Y):
         out[k] = e
     ni = out.get("ni")
     eps_last, ni_last = rec["eps"][-1], last["ni"]
+    if eps_last and not rec.get("split_adj") and rec.get("shares_fy") and rec.get("shares_now"):
+        eps_last = eps_last * rec["shares_fy"] / rec["shares_now"]  # 증자·소각 반영
     if ni and eps_last and ni_last and ni_last > 0:
         base = (ni["seasonal"] if ni.get("seasonal") is not None else ni["simple"]) * 1e8
         eps_fwd = eps_last * base / ni_last
@@ -760,6 +822,11 @@ def explain(r):
         R.append((1 + r["q_op_yoy"], f"{r['q_label']} 누적 영업이익 전년 대비 {fmt_pct(r['q_op_yoy'], 0)} 증가"))
     R = [t for _, t in sorted(R, key=lambda x: -x[0])][:4]
 
+    sr = r.get("share_ratio")
+    if r.get("split_adj"):
+        C.append(f"발행주식수가 {r['fiscal_label']} 말 대비 {sr:.2f}배 — 액면분할·병합 등으로 보고 과거 주당배당금·EPS를 현재 주식수 기준으로 환산")
+    elif sr and abs(sr - 1) >= 0.05:
+        C.append(f"발행주식수가 {r['fiscal_label']} 말 대비 {(sr - 1) * 100:+.0f}% — 증자·감자·소각 여부 확인 (PER은 시가총액 기준으로 계산)")
     dps = r["dps"]
     prev = [v for v in dps[2:5] if v]
     if dps[-1] and prev and dps[-1] > 1.6 * statistics.median(prev):
@@ -793,7 +860,7 @@ def export(r, brief=False):
     base = {
         "code": r["code"], "name": r["name"], "market": r["market"], "sector": r["sector_name"],
         "price": r["price"], "mcap": r["mcap"], "score": r["score"], "cats": r["cats"],
-        "yield": r1(r["cur_yield"], 2), "per": r1(r.get("per")), "dps": r["dps"][-1],
+        "yield": r1(r["cur_yield"], 2), "per": r1(r.get("per")), "dps": r1(r["dps"][-1], 1),
         "auditor": r.get("auditor"),
     }
     if brief:
@@ -809,10 +876,12 @@ def export(r, brief=False):
         "yld_avg": r1(r.get("yld_avg"), 2), "yld_min": r1(r.get("yld_min"), 2), "yld_max": r1(r.get("yld_max"), 2),
         "yld_ratio": r1(r.get("yld_ratio"), 2), "per_rel": r1(r.get("per_rel"), 2), "sec_per": r1(r.get("sec_per")),
         "peg": r1(r.get("peg"), 2), "ocf_ni": r1(r.get("ocf_ni"), 2), "fcf_cov": r1(r.get("fcf_cov"), 1),
-        "series": {"dps": r["dps"], "eps": r["eps"], "yld": r["yld"], "payout": r["payout"],
+        "series": {"dps": [r1(x, 1) for x in r["dps"]], "eps": [r1(x, 0) for x in r["eps"]], "yld": r["yld"], "payout": r["payout"],
                    "rev": eok(r["rev"]), "op": eok(r["op"]), "ni": eok(r["ni"]), "fcf": eok(r["fcf"] or [])},
         "reasons": r["reasons"], "cautions": r["cautions"], "fs": r.get("fs"),
         "est": r.get("est"), "per_fwd": r1(r.get("per_fwd")), "disc": r.get("disc", []),
+        "auditor_src": r.get("auditor_src"), "bs_src": r.get("bs_src"),
+        "share_ratio": r1(r.get("share_ratio"), 3), "split_adj": bool(r.get("split_adj")),
         "payout_flag": bool(r["payout"][-1] and r["payout"][-1] >= CFG["payout_flag"]),
     })
     return base

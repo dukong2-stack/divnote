@@ -490,27 +490,27 @@ function openDetail(code, fromList=false){
     <div class="block"><div class="scoreline"><div><div class="big">${Math.round(c.score)}</div><div class="sub">후보 ${rank}위</div></div>
       <div class="cats">${Object.entries(CAT).map(([k,[t,col]]) => `<div class="cat"><span>${t}</span><span class="t"><b style="width:${c.cats[k]}%;background:${col}"></b></span><em>${c.cats[k]}</em></div>`).join("")}</div></div></div>
     <div class="block"><h4>배당률 밴드</h4>${band(c,true)}
-      <p class="note" style="margin:16px 0 0">주당배당금 ${won(c.dps)}원 기준. 5년 평균 대비 ${c.yld_ratio?`${c.yld_ratio.toFixed(2)}배`:"–"} — 1보다 클수록 배당 기준으로 싸게 거래되는 상태입니다.</p></div>
+      <p class="note" style="margin:16px 0 0">${L.fiscal_year}년 주당배당금 ${won(c.dps)}원${c.split_adj?"(현재 주식수 기준 환산)":""} ÷ ${fmtDate(L.price_date)} 종가. 5년 평균 대비 ${c.yld_ratio?`${c.yld_ratio.toFixed(2)}배`:"–"} — 1보다 클수록 배당 기준으로 싸게 거래되는 상태입니다.</p></div>
     <div class="block"><h4>선정 이유</h4><ul class="pts">${c.reasons.map(r => `<li>${esc(r)}</li>`).join("") || "<li>세부 지표가 고르게 상위권</li>"}</ul></div>
     ${estBlock(c)}
     ${c.cautions.length ? `<div class="block"><h4>확인할 점</h4><ul class="pts warn">${c.cautions.map(r => `<li>${esc(r)}</li>`).join("")}</ul></div>`:""}
-    <div class="block"><h4>주요 지표</h4><table class="kv">
-      <tr><td>현재 감사인 <small>최근 정기보고서 기준</small></td><td>${esc(c.auditor||"확인 안 됨")}</td></tr>
-      <tr><td>PER <small>업종 중앙 ${c.sec_per??"–"}배</small></td><td>${c.per??"–"}배</td></tr>
-      <tr><td>PBR</td><td>${c.pbr??"–"}배</td></tr>
-      <tr><td>PEG</td><td>${c.peg??"–"}</td></tr>
-      <tr><td>3년 평균 ROE</td><td>${pct(c.roe3)}</td></tr>
-      <tr><td>3년 평균 영업이익률</td><td>${pct(c.opm)}</td></tr>
-      <tr><td>부채비율</td><td>${c.debt!=null?pct(c.debt,0):"해당 없음"}</td></tr>
-      <tr><td>매출 / EPS 3년 연평균 성장</td><td>${pct(c.rev_cagr)} / ${pct(c.eps_cagr)}</td></tr>
-      <tr><td>${esc(L.quarter||"최근 분기")} 누적 영업이익 증감</td><td>${signPct(c.q_op_yoy,0)}</td></tr>
-      <tr><td>배당성향 ${c.payout_flag?`<small>${L.config.payout_flag}% 이상</small>`:""}</td><td>${pct(c.payout,0)}</td></tr>
-      <tr><td>연속 배당 / 5년 내 삭감</td><td>${c.consec>=6?"6년 이상":c.consec+"년"} / ${c.cuts}회</td></tr>
-      <tr><td>주당배당금 3년 연평균 증가</td><td>${pct(c.dps_cagr)}</td></tr>
-      <tr><td>영업현금흐름 ÷ 순이익</td><td>${c.ocf_ni??"–"}배</td></tr>
-      <tr><td>잉여현금흐름 ÷ 배당금 (3년)</td><td>${c.fcf_cov??"–"}배</td></tr>
+    <div class="block"><h4>주요 지표</h4>
+      <p class="note" style="margin:-4px 0 6px">주가는 ${fmtDate(L.price_date)} 종가 기준입니다. 각 항목 아래에 재무 수치의 기준 시점을 적었습니다.</p><table class="kv">
+      <tr><td>현재 감사인 <small>${esc(c.auditor_src||"최근 정기보고서")} 기준</small></td><td>${esc(c.auditor||"확인 안 됨")}</td></tr>
+      <tr><td>PER <small>${L.fiscal_year}년 순이익 기준, 업종 중앙 ${c.sec_per??"–"}배</small></td><td>${c.per??"–"}배</td></tr>
+      ${c.per_fwd!=null?`<tr><td>PER <small>${c.est?.year??""}년 추정 순이익 기준</small></td><td>${c.per_fwd}배</td></tr>`:""}
+      <tr><td>PBR <small>${esc(c.bs_src||L.fiscal_year+"년 말")} 자본 기준</small></td><td>${c.pbr??"–"}배</td></tr>
+      <tr><td>PEG <small>${L.fiscal_year}년 PER ÷ 3년 EPS 성장률</small></td><td>${c.peg??"–"}</td></tr>
+      <tr><td>평균 ROE <small>${L.fiscal_year-2}~${L.fiscal_year}년</small></td><td>${pct(c.roe3)}</td></tr>
+      <tr><td>평균 영업이익률 <small>${L.fiscal_year-2}~${L.fiscal_year}년</small></td><td>${pct(c.opm)}</td></tr>
+      <tr><td>부채비율 <small>${esc(c.bs_src||L.fiscal_year+"년 말")} 기준</small></td><td>${c.debt!=null?pct(c.debt,0):"해당 없음"}</td></tr>
+      <tr><td>매출 / EPS 연평균 성장 <small>${L.fiscal_year-3}→${L.fiscal_year}년</small></td><td>${pct(c.rev_cagr)} / ${pct(c.eps_cagr)}</td></tr>
+      <tr><td>배당성향 <small>${L.fiscal_year}년${c.payout_flag?`, ${L.config.payout_flag}% 이상`:""}</small></td><td>${pct(c.payout,0)}</td></tr>
+      <tr><td>연속 배당 / 삭감 <small>${L.fiscal_year}년까지, 최근 5년 삭감 횟수</small></td><td>${c.consec>=6?"6년 이상":c.consec+"년"} / ${c.cuts}회</td></tr>
+      <tr><td>주당배당금 연평균 증가 <small>${L.fiscal_year-3}→${L.fiscal_year}년</small></td><td>${pct(c.dps_cagr)}</td></tr>
+      <tr><td>영업현금흐름 ÷ 순이익 <small>${L.fiscal_year-2}~${L.fiscal_year}년 합계</small></td><td>${c.ocf_ni??"–"}배</td></tr>
+      <tr><td>잉여현금흐름 ÷ 배당금 <small>${L.fiscal_year-2}~${L.fiscal_year}년 합계</small></td><td>${c.fcf_cov??"–"}배</td></tr>
     </table></div>
-    ${discBlock(c)}
     <div class="block"><h4>추가 분석</h4>
       <p class="note" style="margin:0 0 10px">아래 버튼으로 이 종목의 수치를 담은 요청 문구를 복사해 Claude 채팅에 붙여넣으면, 최근 공시·기사·증권사 리포트를 찾아 정리해 줍니다.</p>
       <div class="links"><button class="btn pri" id="copyPrompt">분석 요청 문구 복사</button>
@@ -521,16 +521,17 @@ function openDetail(code, fromList=false){
       </div></div>
     ${memoBlock(c.code)}
     <div class="block charts">
-      <div class="chart"><h5>주당배당금 (원)</h5>${bars(c.series.dps, ys, "var(--gold)")}</div>
+      <div class="chart"><h5>주당배당금 (원${c.split_adj?", 현재 주식수 기준 환산":""})</h5>${bars(c.series.dps, ys, "var(--gold)")}</div>
       <div class="chart"><h5>공시 시가배당률 (%)</h5>${bars(c.series.yld, ys, "var(--gold)", "%", {fmt:v=>v.toFixed(1)})}</div>
-      <div class="chart"><h5>주당순이익 (원)</h5>${bars(c.series.eps, ys, "var(--slate)")}</div>
+      <div class="chart"><h5>주당순이익 (원${c.split_adj?", 현재 주식수 기준 환산":""})</h5>${bars(c.series.eps, ys, "var(--slate)")}</div>
       <div class="chart"><h5>영업이익 (억원, ${c.fs==="OFS"?"별도":"연결"})</h5>${bars(c.series.op, ys, "var(--celadon)")}</div>
     </div>
     <div class="links">
       ${held?"":`<button class="btn pri" id="addFromDetail">보유에 추가</button>`}
       <a class="btn" href="https://finance.naver.com/item/main.naver?code=${c.code}" target="_blank" rel="noopener">네이버 증권</a>
       <a class="btn" href="https://dart.fss.or.kr/dsab007/main.do?option=corp&textCrpNm=${encodeURIComponent(c.name)}" target="_blank" rel="noopener">DART 공시</a>
-    </div>`;
+    </div>
+    ${discBlock(c)}`;
   if(!$("#sheet").classList.contains("open") || fromList) history.pushState({v:"sheet"}, "");
   sheetBack = fromList ? renderOverlap : null;
   $("#sheet").classList.add("open");
