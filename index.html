@@ -187,6 +187,15 @@ table.kv td small.up{color:var(--up)}table.kv td small.down{color:var(--down)}
 .memo li small{display:flex;justify-content:space-between;color:var(--muted);font-size:12px;margin-bottom:3px;white-space:normal}
 .memo li button{border:0;background:none;color:var(--muted);font-size:12px;padding:0}
 .mm{font-size:11px;color:var(--slate);border:1px solid currentColor;border-radius:4px;padding:0 4px;margin-left:6px;vertical-align:2px}
+.search{display:flex;gap:8px;margin:2px 0 12px}
+.search input{flex:1;border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:9px 14px;font-size:14px}
+.status{border-radius:var(--radius-l);padding:12px 16px;margin:10px 0;font-size:14px;border:1px solid var(--line);background:var(--surface)}
+.status b{display:block;font-size:15px;margin-bottom:2px}
+.status.out{background:var(--warn-bg);border-color:color-mix(in srgb,var(--warn) 35%,var(--line))}
+.status.out b{color:var(--warn)}
+.status ul{margin:6px 0 0;padding-left:18px}
+.rh{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.rh span{font-size:12px;border:1px solid var(--line);border-radius:999px;padding:2px 9px;background:var(--bg)}
 .toast{position:fixed;left:50%;bottom:calc(76px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:9px 16px;border-radius:999px;font-size:13px;z-index:30;opacity:0;max-width:90%;text-align:center;pointer-events:none;transition:opacity .2s}
 .toast.on{opacity:.92}
 .note{font-size:12px;color:var(--muted);margin:10px 2px}
@@ -235,7 +244,7 @@ const store = {
 let PF = store.get("dv.portfolio", {holdings:[], cash:0});
 let MEMO = store.get("dv.memos", {});
 let RULES = store.get("dv.rules", {targetN:12, maxW:10, secCap:25, band:5, gap:20});
-let L = null, U = null, P = null, H = [], B = null;
+let L = null, U = null, P = null, H = [], B = null, SNAP = [];
 let candFilter = "all";
 
 async function getJSON(path){
@@ -250,6 +259,8 @@ async function load(){
   H = H || [];
   $("#asof").textContent = L ? `주가 ${fmtDate(L.price_date)} 기준` : "데이터 없음";
   renderAll();
+  const snaps = await Promise.allSettled(H.slice(0, 12).map(m => getJSON(`data/history/${m}.json`).then(j => ({m, ...j}))));
+  SNAP = snaps.filter(x => x.status==="fulfilled").map(x => x.value);
 }
 const fmtDate = d => d ? `${d.slice(0,4)}.${d.slice(4,6)}.${d.slice(6,8)}` : "";
 function renderAll(){ renderCand(); renderHold(); renderReb(); renderHist(); renderSet(); }
@@ -383,6 +394,73 @@ function openMemo(code){
   $("#sheet").classList.add("open"); $("#sheetPanel").scrollTop = 0;
 }
 
+/* ── 종목 조회 ── */
+function rankNow(code){
+  const ci = L?.candidates?.findIndex(c => c.code===code);
+  if(ci >= 0) return ci + 1;
+  return U?.u?.[code]?.rk ?? null;
+}
+function rankAt(snap, code){
+  if(snap.r && snap.r[code]) return snap.r[code];
+  const i = (snap.c||[]).findIndex(c => c.code===code);
+  return i >= 0 ? i + 1 : null;
+}
+function rankHistory(code){
+  if(!SNAP.length) return "";
+  const top = L?.config?.top_n || 30;
+  const items = SNAP.slice().reverse().map(sn => { const r = rankAt(sn, code);
+    return `<span>${sn.m.slice(2).replace("-", ".")} ${r ? r+"위" : (sn.r ? "기준 미달" : top+"위 밖")}</span>`; });
+  const now = rankNow(code);
+  items.push(`<span><b>지금 ${now ? now+"위" : "–"}</b></span>`);
+  return `<div class="rh">${items.join("")}</div>`;
+}
+function codeFrom(raw){
+  raw = (raw||"").trim();
+  let code = (raw.match(/\(([0-9A-Z]{6})\)/)||[])[1] || (raw.match(/^[0-9A-Z]{6}$/)||[])[0];
+  if(!code && P){ const hit = Object.entries(P.p).find(([k,v]) => v[0]===raw) || Object.entries(P.p).find(([k,v]) => (v[0]||"").includes(raw)); if(hit) code = hit[0]; }
+  return code;
+}
+function lookup(raw){
+  const code = codeFrom(raw);
+  if(!code){ toast("종목을 찾지 못했습니다"); return; }
+  if(findCand(code)){ openDetail(code); return; }
+  openLookup(code);
+}
+function openLookup(code){
+  sheetBack = null;
+  const u = U?.u?.[code], o = L?.others?.find(x => x.code===code), p = P?.p?.[code];
+  const C = L.config, top = C.top_n;
+  let status;
+  if(o) status = `<div class="status"><b>기준은 모두 통과, 순위 ${u?.rk ?? "–"}위 (${Math.round(o.score)}점)</b>상위 ${top}위 안에 들지 못해 후보 목록에는 없습니다. 30위 점수는 ${Math.round(L.candidates[L.candidates.length-1]?.score ?? 0)}점입니다.</div>`;
+  else if(u && u.f?.length) status = `<div class="status out"><b>선정 기준에서 탈락</b><ul>${u.f.map(f => `<li>${esc(f)}</li>`).join("")}</ul></div>`;
+  else if(p && !code.endsWith("0")) status = `<div class="status out"><b>평가 대상 아님</b>우선주는 평가하지 않습니다. 보통주로 조회해 보세요.</div>`;
+  else if(p && (p[2]||0) < C.min_mcap_eok) status = `<div class="status out"><b>평가 대상 아님</b>시가총액 ${eokTxt(p[2])}으로 기준(${C.min_mcap_eok.toLocaleString("ko-KR")}억) 미달입니다.</div>`;
+  else if(p && p[3]==="KOSDAQ" && !C.include_kosdaq) status = `<div class="status out"><b>평가 대상 아님</b>코스닥 종목은 제외하도록 설정되어 있습니다.</div>`;
+  else status = `<div class="status out"><b>평가 대상 아님</b>스팩·리츠이거나 OpenDART 고유번호를 찾지 못한 종목입니다.</div>`;
+  $("#sheetPanel").innerHTML = `
+    <div class="bar"><div><h3>${esc(p?.[0] || u?.n || code)}</h3><div class="sub">${code}${p?`, ${p[3]==="KOSPI"?"코스피":"코스닥"}, 시총 ${eokTxt(p[2])}, ${won(p[1])}원`:""}</div></div>
+      <button class="x" aria-label="닫기" id="closeSheet">×</button></div>
+    ${status}
+    ${o ? `<div class="block">${segbar(o.cats)}<div class="cats" style="margin-top:10px">${Object.entries(CAT).map(([k,[t,col]]) => `<div class="cat"><span>${t}</span><span class="t"><b style="width:${o.cats[k]}%;background:${col}"></b></span><em>${o.cats[k]}</em></div>`).join("")}</div></div>`:""}
+    ${u ? `<div class="block"><h4>참고 지표 <small style="font-weight:400;color:var(--muted)">주가 ${fmtDate(L.price_date)} 종가, ${L.fiscal_year}년 사업보고서 기준</small></h4><table class="kv">
+      ${u.s?`<tr><td>업종</td><td>${esc(u.s)}</td></tr>`:""}
+      ${u.y!=null?`<tr><td>현재 배당률</td><td>${pct(u.y,2)}</td></tr>`:""}
+      ${u.dps!=null?`<tr><td>주당배당금 <small>${L.fiscal_year}년</small></td><td>${won(u.dps)}원</td></tr>`:""}
+      ${u.per!=null?`<tr><td>PER <small>${L.fiscal_year}년 순이익 기준</small></td><td>${u.per}배</td></tr>`:""}
+      ${u.a?`<tr><td>현재 감사인</td><td>${esc(u.a)}</td></tr>`:""}
+    </table></div>` : ""}
+    ${SNAP.length ? `<div class="block"><h4>순위 변화 <small style="font-weight:400;color:var(--muted)">매월 첫 수집 기준</small></h4>${rankHistory(code)}</div>`:""}
+    ${memoBlock(code)}
+    <div class="links">
+      <a class="btn" href="https://finance.naver.com/item/main.naver?code=${code}" target="_blank" rel="noopener">네이버 증권</a>
+      <a class="btn" href="https://dart.fss.or.kr/dsab007/main.do?option=corp&textCrpNm=${encodeURIComponent(p?.[0]||"")}" target="_blank" rel="noopener">DART 공시</a>
+    </div>`;
+  $("#closeSheet").onclick = closeSheet;
+  bindMemo(code, () => refreshMemo(code));
+  if(!$("#sheet").classList.contains("open")) history.pushState({v:"sheet"}, "");
+  $("#sheet").classList.add("open"); $("#sheetPanel").scrollTop = 0;
+}
+
 /* ── 바닥 신호와 겹치는 후보 ── */
 const STG = {1:"① 과매도", 2:"② 바닥 형성", 3:"③ 전환 확인"};
 const CIRC = {1:"①", 2:"②", 3:"③"};
@@ -435,6 +513,7 @@ function renderCand(){
   if(candFilter==="new") list = list.filter(c => !held.has(c.code));
   if(candFilter==="clean") list = list.filter(c => !c.cautions.length);
   el.innerHTML = `
+    <form class="search" id="lookForm" autocomplete="off"><input id="lookInput" list="stocklist" placeholder="종목 조회 — 왜 빠졌는지, 몇 위인지" aria-label="종목 조회"><button class="btn" type="submit">조회</button></form>
     <h2>이번 회차 후보 ${L.candidates.length}종목</h2>
     <p class="lede">${L.fiscal_year}년 사업보고서 기준. 평가 ${L.counts.universe}종목 중 이익 기준 ${L.counts.stage1}종목, 배당 기준까지 ${L.counts.stage2}종목 통과.</p>
     ${B ? (() => { const ov = overlaps(); const cnt = k => ov.filter(o => o.b.stage===k).length;
@@ -455,6 +534,8 @@ function renderCand(){
   el.querySelectorAll(".chip").forEach(b => b.onclick = () => { candFilter = b.dataset.f; renderCand(); });
   el.querySelectorAll(".row").forEach(b => b.onclick = () => openDetail(b.dataset.code));
   const ob = $("#ovlBtn"); if(ob) ob.onclick = openOverlap;
+  $("#lookForm").onsubmit = e => { e.preventDefault(); lookup($("#lookInput").value); $("#lookInput").blur(); };
+  $("#lookInput").onchange = e => { if(/\([0-9A-Z]{6}\)$/.test(e.target.value)){ lookup(e.target.value); e.target.blur(); } };
 }
 
 function bars(vals, years, color, unit, opt={}){
@@ -489,6 +570,7 @@ function openDetail(code, fromList=false){
     ${(() => { const b = badakMap()[c.code]; return b ? `<div class="block" style="padding:10px 16px"><span class="bd s${b.stage}" style="margin:0 8px 0 0">${STG[b.stage]}</span>바닥 신호 점수 ${Math.round(b.score)}, ${esc(b.since||"")} 진입</div>` : ""; })()}
     <div class="block"><div class="scoreline"><div><div class="big">${Math.round(c.score)}</div><div class="sub">후보 ${rank}위</div></div>
       <div class="cats">${Object.entries(CAT).map(([k,[t,col]]) => `<div class="cat"><span>${t}</span><span class="t"><b style="width:${c.cats[k]}%;background:${col}"></b></span><em>${c.cats[k]}</em></div>`).join("")}</div></div></div>
+    ${SNAP.length ? `<div class="block" style="padding:10px 16px"><span style="font-size:13px;color:var(--muted)">순위 변화</span>${rankHistory(c.code)}</div>`:""}
     <div class="block"><h4>배당률 밴드</h4>${band(c,true)}
       <p class="note" style="margin:16px 0 0">${L.fiscal_year}년 주당배당금 ${won(c.dps)}원${c.split_adj?"(현재 주식수 기준 환산)":""} ÷ ${fmtDate(L.price_date)} 종가. 5년 평균 대비 ${c.yld_ratio?`${c.yld_ratio.toFixed(2)}배`:"–"} — 1보다 클수록 배당 기준으로 싸게 거래되는 상태입니다.</p></div>
     <div class="block"><h4>선정 이유</h4><ul class="pts">${c.reasons.map(r => `<li>${esc(r)}</li>`).join("") || "<li>세부 지표가 고르게 상위권</li>"}</ul></div>

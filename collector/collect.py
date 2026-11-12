@@ -719,7 +719,7 @@ def main():
     ym = NOW.strftime("%Y-%m")
     hf = HIST / f"{ym}.json"
     if not hf.exists():
-        write_json(hf, {"date": bas_dt, "fy": Y, "c": [{"code": r["code"], "name": r["name"], "score": r["score"], "price": r["price"], "yield": r1(r["cur_yield"], 2)} for r in top]})
+        write_json(hf, {"date": bas_dt, "fy": Y, "c": [{"code": r["code"], "name": r["name"], "score": r["score"], "price": r["price"], "yield": r1(r["cur_yield"], 2)} for r in top], "r": {r["code"]: i for i, r in enumerate(stage2, 1)}})
     idx = sorted([f.stem for f in HIST.glob("*.json") if f.stem != "index"], reverse=True)
     write_json(HIST / "index.json", idx)
     log(f"완료: 후보 {len(cand)}종목, DART 호출 {CALLS['dart']}회")
