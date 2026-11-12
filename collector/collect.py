@@ -260,7 +260,7 @@ def pick_acc(nm):
 
 def multi_accounts(corps, year, reprt):
     """다중회사 주요계정(100개씩). 반환: {corp: {acc: [당기, 전기, 전전기], 'q': {...}}}"""
-    name = f"fin_{year}_{reprt}"
+    name = f"fin_{year}_{reprt}" if reprt == "11011" else f"finq_{year}_{reprt}"
     cache = load_cache(name)
     todo = [c for c in corps if c not in cache]
     for i in range(0, len(todo), 100):
@@ -285,7 +285,9 @@ def multi_accounts(corps, year, reprt):
                 else:  # 분기·반기: 누적 금액 우선
                     cur = num(it.get("thstrm_add_amount")) if it.get("thstrm_add_amount") not in (None, "", "-") else num(it.get("thstrm_amount"))
                     prv = num(it.get("frmtrm_add_amount")) if it.get("frmtrm_add_amount") not in (None, "", "-") else num(it.get("frmtrm_amount"))
-                    out[k] = [cur, prv]
+                    q_cur = num(it.get("thstrm_amount")) if it.get("thstrm_add_amount") not in (None, "", "-") else None
+                    q_prv = num(it.get("frmtrm_amount")) if it.get("frmtrm_add_amount") not in (None, "", "-") else None
+                    out[k] = [cur, prv, q_cur, q_prv]  # [당기 누적, 전기 누적, 당기 3개월, 전기 3개월]
             out["fs"] = "CFS" if has_cfs else "OFS"
             cache[c] = out
         save_cache(name, cache)
@@ -562,12 +564,14 @@ def main():
             save_cache("cashflow", fcache)
     save_cache("cashflow", fcache)
 
-    q = None
     md = NOW.month * 100 + NOW.day
-    if md >= 1120: q = (NOW.year, "11014", "3분기")
-    elif md >= 820: q = (NOW.year, "11012", "반기")
-    elif md >= 520: q = (NOW.year, "11013", "1분기")
-    qdata = multi_accounts([r["corp"] for r in stage2], q[0], q[1]) if q and stage2 else {}
+    qcands = [x for x in ((NOW.year, "11014", "3분기", 3, 1115), (NOW.year, "11012", "반기", 2, 815), (NOW.year, "11013", "1분기", 1, 516)) if md >= x[4]]
+    qsets = [(qc, multi_accounts([r["corp"] for r in stage2], qc[0], qc[1])) for qc in qcands] if stage2 else []
+    q = qcands[0] if qcands else None
+
+    # 7) 최근 공시 (후보 상위만)
+    bgn = (NOW - dt.timedelta(days=CFG.get("disclosure_days", 120))).strftime("%Y%m%d")
+    end = NOW.strftime("%Y%m%d")
 
     # 6) 지표·점수
     for rec in stage2:
@@ -601,19 +605,27 @@ def main():
             div3 = sum((v or 0) * 1e6 for v in rec["divtot"][3:])
             fcf3 = sum(v for v in fcf if v is not None)
             rec["fcf_cov"] = fcf3 / div3 if div3 > 0 else None
-        qd = qdata.get(rec["corp"], {}).get("op") if qdata else None
+        qc, qrec = None, None
+        for c_, data in qsets:
+            if data.get(rec["corp"], {}).get("op"):
+                qc, qrec = c_, data[rec["corp"]]
+                break
+        qd = (qrec or {}).get("op")
         rec["q_op_yoy"] = (qd[0] / qd[1] - 1) if qd and qd[0] is not None and qd[1] and qd[1] > 0 else None
-        rec["q_label"] = q[2] if q else None
+        rec["q_label"] = qc[2] if qc else (q[2] if q else None)
+        rec["est"] = estimate(rec, qc, qrec, Y) if qc else None
+        if rec["est"] and rec["est"].get("per_fwd"):
+            rec["per_fwd"] = rec["est"]["per_fwd"]
         p = rec["payout"][-1]
         rec["payout_fit"] = None if p is None else (1.0 if 20 <= p <= 60 else max(0.0, 1 - min(abs(p - 20), abs(p - 60)) / 30))
 
     def col(k):
         return [r.get(k) for r in stage2]
     parts = {
-        "value": [pct_rank(col("per"), False), pct_rank(col("per_rel"), False), pct_rank(col("yld_ratio")), pct_rank(col("peg"), False), pct_rank(col("pbr"), False)],
+        "value": [pct_rank(col("per_fwd"), False), pct_rank(col("per"), False), pct_rank(col("per_rel"), False), pct_rank(col("yld_ratio")), pct_rank(col("peg"), False), pct_rank(col("pbr"), False)],
         "dividend": [pct_rank(col("cur_yield")), pct_rank(col("consec")), pct_rank(col("dps_cagr")), [x if x is not None else 0.5 for x in col("payout_fit")], pct_rank(col("fcf_cov"))],
         "quality": [pct_rank(col("roe3")), pct_rank(col("opm")), pct_rank(col("ocf_ni")), pct_rank(col("debt"), False)],
-        "growth": [pct_rank(col("rev_cagr")), pct_rank(col("eps_cagr")), pct_rank(col("q_op_yoy"))],
+        "growth": [pct_rank(col("rev_cagr")), pct_rank(col("eps_cagr")), pct_rank(col("q_op_yoy")), pct_rank([((r.get("est") or {}).get("op") or {}).get("vs_last") for r in stage2])],
     }
     W = CFG["weights"]; wsum = sum(W.values())
     for i, rec in enumerate(stage2):
@@ -627,6 +639,12 @@ def main():
         universe_out[rec["code"]].update(sc=rec["score"], rk=rank)
 
     top = stage2[: CFG["top_n"]]
+    for rec in top:
+        rec["disc"] = recent_disclosures(rec["corp"], bgn, end)
+        flags = sorted({f for d in rec["disc"] for f in d.get("f", [])})
+        rec["disc_flags"] = flags
+        if flags:
+            rec["cautions"].append("최근 공시: " + ", ".join(flags) + " — 내용 확인")
     cand = [export(r) for r in top]
     latest = {
         "updated": NOW.strftime("%Y-%m-%d %H:%M"), "price_date": bas_dt, "fiscal_year": Y, "years": years,
@@ -645,6 +663,72 @@ def main():
     idx = sorted([f.stem for f in HIST.glob("*.json") if f.stem != "index"], reverse=True)
     write_json(HIST / "index.json", idx)
     log(f"완료: 후보 {len(cand)}종목, DART 호출 {CALLS['dart']}회")
+
+
+def estimate(rec, qc, qrec, Y):
+    """최근 분기 누적으로 올해 연간 실적 추정.
+    단순 연환산 = 누적 × 4/분기수, 추정(계절성 반영) = 전년 연간 × 올해 누적 / 전년 같은 기간 누적"""
+    year, _, label, nq, _ = qc
+    out = {"year": year, "label": label, "nq": nq}
+    last = {"rev": rec["rev"][-1], "op": rec["op"][-1], "ni": rec["ni"][-1]}
+    for k in ("rev", "op", "ni"):
+        v = qrec.get(k)
+        if not v or v[0] is None:
+            continue
+        cum, cum_prev = v[0], v[1]
+        q_cur = v[2] if len(v) > 2 else None
+        q_prev = v[3] if len(v) > 3 else None
+        simple = cum * 4 / nq
+        seasonal = last[k] * cum / cum_prev if last[k] is not None and cum_prev and cum_prev > 0 and cum > 0 else None
+        e = {
+            "cum": r1(cum / 1e8, 0), "cum_prev": r1(cum_prev / 1e8, 0) if cum_prev is not None else None,
+            "yoy": r1((cum / cum_prev - 1) * 100) if cum_prev and cum_prev > 0 else None,
+            "q": r1(q_cur / 1e8, 0) if q_cur is not None else None,
+            "q_yoy": r1((q_cur / q_prev - 1) * 100) if q_cur is not None and q_prev and q_prev > 0 else None,
+            "simple": r1(simple / 1e8, 0), "seasonal": r1(seasonal / 1e8, 0) if seasonal is not None else None,
+            "last": r1(last[k] / 1e8, 0) if last[k] is not None else None,
+        }
+        base = seasonal if seasonal is not None else simple
+        e["vs_last"] = r1((base / last[k] - 1) * 100) if last[k] and last[k] > 0 else None
+        if nq == 2 and last[k] is not None and cum_prev is not None:  # 반기: 직전 반기(전년 하반기) 대비
+            h2 = last[k] - cum_prev
+            e["vs_prev_half"] = r1((cum / h2 - 1) * 100) if h2 > 0 else None
+            e["prev_half"] = r1(h2 / 1e8, 0)
+        out[k] = e
+    ni = out.get("ni")
+    eps_last, ni_last = rec["eps"][-1], last["ni"]
+    if ni and eps_last and ni_last and ni_last > 0:
+        base = (ni["seasonal"] if ni.get("seasonal") is not None else ni["simple"]) * 1e8
+        eps_fwd = eps_last * base / ni_last
+        out["eps_fwd"] = r1(eps_fwd, 0)
+        out["per_fwd"] = r1(rec["price"] / eps_fwd) if eps_fwd > 0 else None
+        if rec["dps"][-1] and eps_fwd > 0:
+            out["payout_fwd"] = r1(rec["dps"][-1] / eps_fwd * 100, 0)
+    return out if len(out) > 3 else None
+
+
+DISC_FLAGS = [
+    ("유상증자", "유상증자"), ("전환사채", "전환사채"), ("신주인수권", "신주인수권부사채"), ("교환사채", "교환사채"),
+    ("최대주주변경", "최대주주 변경"), ("소송", "소송"), ("횡령", "횡령·배임"), ("배임", "횡령·배임"),
+    ("감자", "감자"), ("합병", "합병"), ("분할", "분할"), ("영업양수", "영업양수도"), ("영업양도", "영업양수도"),
+    ("영업정지", "영업정지"), ("불성실공시", "불성실공시"), ("관리종목", "관리종목"), ("거래정지", "거래정지"),
+    ("공개매수", "공개매수"), ("자기주식처분", "자사주 처분"),
+]
+DISC_GOOD = [("자기주식취득", "자사주 취득"), ("자기주식소각", "자사주 소각"), ("주식소각", "자사주 소각"), ("현금ㆍ현물배당", "배당 결정"), ("현금·현물배당", "배당 결정"),
+             ("기업가치제고", "밸류업 공시"), ("영업(잠정)실적", "잠정실적"), ("연결재무제표기준영업(잠정)실적", "잠정실적")]
+
+
+def recent_disclosures(corp, bgn, end):
+    """최근 공시 목록(최대 40건)과 주의·참고 표시"""
+    j = dart("list.json", {"corp_code": corp, "bgn_de": bgn, "end_de": end, "page_count": "100"})
+    out = []
+    for it in (j or {}).get("list", [])[:40]:
+        nm = (it.get("report_nm") or "").strip()
+        key = nm.replace(" ", "")
+        f = sorted({lab for kw, lab in DISC_FLAGS if kw in key})
+        g = sorted({lab for kw, lab in DISC_GOOD if kw in key})
+        out.append({"d": it.get("rcept_dt"), "t": nm, "no": it.get("rcept_no"), "by": it.get("flr_nm"), "f": f, "g": g})
+    return out
 
 
 def fmt_pct(x, d=1):
@@ -668,7 +752,11 @@ def explain(r):
         R.append((1.4 - r["peg"] / 2, f"PEG {r['peg']:.2f} — 이익 성장 대비 주가 부담 낮음"))
     if r.get("fcf_cov") and r["fcf_cov"] >= 1.5:
         R.append((1 + min(r["fcf_cov"], 4) / 8, f"최근 3년 잉여현금흐름이 배당금의 {r['fcf_cov']:.1f}배 — 배당 여력 충분"))
-    if r.get("q_op_yoy") and r["q_op_yoy"] > 0.05:
+    eo = ((r.get("est") or {}).get("op") or {})
+    if eo.get("vs_last") is not None and eo["vs_last"] >= 5:
+        val = eo.get("seasonal") if eo.get("seasonal") is not None else eo.get("simple")
+        R.append((1.1 + eo["vs_last"] / 100, f"올해 영업이익 추정 {val:,.0f}억 — 전년 대비 {eo['vs_last']:+.0f}% ({r['est']['label']} 누적 기준)"))
+    elif r.get("q_op_yoy") and r["q_op_yoy"] > 0.05:
         R.append((1 + r["q_op_yoy"], f"{r['q_label']} 누적 영업이익 전년 대비 {fmt_pct(r['q_op_yoy'], 0)} 증가"))
     R = [t for _, t in sorted(R, key=lambda x: -x[0])][:4]
 
@@ -687,8 +775,13 @@ def explain(r):
     ni, op = r["ni"][-1], r["op"][-1]
     if r["sector"] not in FINANCIAL and ni and op and op > 0 and ni > op * 1.3:
         C.append("순이익이 영업이익보다 크게 많음 — 일회성 이익 포함 여부 확인")
-    if r.get("q_op_yoy") is not None and r["q_op_yoy"] < -0.15:
+    if eo.get("vs_last") is not None and eo["vs_last"] <= -15:
+        C.append(f"올해 영업이익 추정치가 전년보다 {abs(eo['vs_last']):.0f}% 적음 ({r['est']['label']} 누적 기준) — 실적 둔화")
+    elif r.get("q_op_yoy") is not None and r["q_op_yoy"] < -0.15:
         C.append(f"{r['q_label']} 누적 영업이익 전년 대비 {fmt_pct(r['q_op_yoy'], 0)} — 실적 둔화")
+    pf = (r.get("est") or {}).get("payout_fwd")
+    if pf and pf > 90:
+        C.append(f"올해 추정 이익 기준 배당성향 {pf:.0f}% — 현 배당 유지 부담")
     if r.get("ocf_ni") is not None and r["ocf_ni"] < 0.8:
         C.append(f"영업현금흐름이 순이익의 {r['ocf_ni']:.1f}배 — 이익의 현금 전환 약함")
     if r["cuts"]:
@@ -719,6 +812,7 @@ def export(r, brief=False):
         "series": {"dps": r["dps"], "eps": r["eps"], "yld": r["yld"], "payout": r["payout"],
                    "rev": eok(r["rev"]), "op": eok(r["op"]), "ni": eok(r["ni"]), "fcf": eok(r["fcf"] or [])},
         "reasons": r["reasons"], "cautions": r["cautions"], "fs": r.get("fs"),
+        "est": r.get("est"), "per_fwd": r1(r.get("per_fwd")), "disc": r.get("disc", []),
         "payout_flag": bool(r["payout"][-1] and r["payout"][-1] >= CFG["payout_flag"]),
     })
     return base

@@ -170,7 +170,24 @@ details.snap th{font-weight:500;color:var(--muted);font-size:12px}
 .ovl .go{color:var(--muted);font-size:18px}
 .bd{font-size:11px;font-weight:600;border-radius:4px;padding:0 5px;margin-left:6px;vertical-align:2px;color:#fff;background:var(--slate)}
 .bd.s3{background:var(--celadon)}.bd.s1{background:var(--muted)}
-.toast{position:fixed;left:50%;bottom:calc(76px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:9px 16px;border-radius:999px;font-size:13px;z-index:30;opacity:0;pointer-events:none;transition:opacity .2s}
+table.kv td small.up{color:var(--up)}table.kv td small.down{color:var(--down)}
+.est h5{margin:12px 0 4px;font-size:13px}
+.est h5:first-of-type{margin-top:0}
+.est table.kv td{padding:5px 0}
+.disc{list-style:none;margin:0;padding:0}
+.disc li{border-bottom:1px solid var(--line);padding:8px 0;font-size:13.5px}
+.disc li:last-child{border-bottom:0}
+.disc a{color:var(--ink);text-decoration:none}
+.disc small{display:block;color:var(--muted);font-size:11.5px}
+.fl{font-size:11px;font-weight:600;border-radius:4px;padding:0 5px;margin-left:5px;white-space:nowrap}
+.fl.bad{color:var(--warn);background:var(--warn-bg)}.fl.good{color:var(--celadon);background:var(--ok-bg)}
+.memo textarea{width:100%;min-height:110px;border:1px solid var(--line);background:var(--bg);border-radius:var(--radius-s);padding:10px;font:inherit;font-size:14px;resize:vertical;color:var(--ink)}
+.memo ul{list-style:none;margin:10px 0 0;padding:0}
+.memo li{border-top:1px solid var(--line);padding:10px 0;font-size:14px;white-space:pre-wrap;word-break:break-word}
+.memo li small{display:flex;justify-content:space-between;color:var(--muted);font-size:12px;margin-bottom:3px;white-space:normal}
+.memo li button{border:0;background:none;color:var(--muted);font-size:12px;padding:0}
+.mm{font-size:11px;color:var(--slate);border:1px solid currentColor;border-radius:4px;padding:0 4px;margin-left:6px;vertical-align:2px}
+.toast{position:fixed;left:50%;bottom:calc(76px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:9px 16px;border-radius:999px;font-size:13px;z-index:30;opacity:0;max-width:90%;text-align:center;pointer-events:none;transition:opacity .2s}
 .toast.on{opacity:.92}
 .note{font-size:12px;color:var(--muted);margin:10px 2px}
 .scroll-x{overflow-x:auto}
@@ -216,6 +233,7 @@ const store = {
   set(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){ alert("이 브라우저에 저장하지 못했습니다. 백업 파일을 내려받아 두세요."); } }
 };
 let PF = store.get("dv.portfolio", {holdings:[], cash:0});
+let MEMO = store.get("dv.memos", {});
 let RULES = store.get("dv.rules", {targetN:12, maxW:10, secCap:25, band:5, gap:20});
 let L = null, U = null, P = null, H = [], B = null;
 let candFilter = "all";
@@ -263,6 +281,106 @@ const firm = n => n ? n.replace("회계법인","").replace("(주)","").trim() : 
 function auditorOf(code){
   const c = findCand(code) || L?.others?.find(o => o.code===code);
   return c?.auditor || U?.u?.[code]?.a || null;
+}
+
+/* ── 올해 실적 추정·공시·추가 분석 ── */
+const sgn = v => v==null ? "–" : `${v>0?"+":""}${v.toFixed(1)}%`;
+const eok = v => v==null ? "–" : `${Math.round(v).toLocaleString("ko-KR")}억`;
+function estBlock(c){
+  const e = c.est; if(!e) return "";
+  const prevY = L.fiscal_year, y = e.year, qn = {1:"1분기",2:"2분기",3:"3분기"}[e.nq];
+  const part = (k, t) => { const v = e[k]; if(!v) return ""; return `<h5>${t}</h5><table class="kv">
+    <tr><td>${prevY}년 연간</td><td>${eok(v.last)}</td></tr>
+    <tr><td>${y}년 ${e.label} 누적 <small>전년 같은 기간 ${eok(v.cum_prev)}</small></td><td>${eok(v.cum)} <small class="${cls(v.yoy)}">${sgn(v.yoy)}</small></td></tr>
+    ${v.q!=null?`<tr><td>${qn} 3개월 <small>전년 같은 분기 대비</small></td><td>${eok(v.q)} <small class="${cls(v.q_yoy)}">${sgn(v.q_yoy)}</small></td></tr>`:""}
+    ${v.vs_prev_half!=null?`<tr><td>직전 반기(${prevY}년 하반기 ${eok(v.prev_half)}) 대비</td><td class="${cls(v.vs_prev_half)}">${sgn(v.vs_prev_half)}</td></tr>`:""}
+    <tr><td>${y}년 연간 추정 <small>계절성 반영${v.simple!=null?`, 단순 연환산 ${eok(v.simple)}`:""}</small></td><td><b>${eok(v.seasonal ?? v.simple)}</b> <small class="${cls(v.vs_last)}">${sgn(v.vs_last)}</small></td></tr>
+  </table>`; };
+  return `<div class="block est"><h4>${y}년 실적 추정 <small style="font-weight:400;color:var(--muted)">${e.label} 공시 기준</small></h4>
+    ${part("op","영업이익")}
+    ${["rev","ni"].some(k=>e[k]) ? `<h5>매출액·순이익</h5><table class="kv">${[["rev","매출액"],["ni","순이익"]].filter(([k])=>e[k]).map(([k,t]) => { const v = e[k];
+      return `<tr><td>${t} <small>${e.label} 누적 ${eok(v.cum)}</small> <small class="${cls(v.yoy)}">${sgn(v.yoy)}</small></td><td>${eok(v.seasonal ?? v.simple)} 추정 <small class="${cls(v.vs_last)}">${sgn(v.vs_last)}</small></td></tr>`; }).join("")}</table>`:""}
+    ${e.eps_fwd?`<h5>주가 지표</h5><table class="kv">
+      <tr><td>주당순이익 <small>${prevY}년 ${won(c.series.eps[5])}원</small></td><td>${won(e.eps_fwd)}원 추정</td></tr>
+      <tr><td>PER <small>${prevY}년 기준 ${c.per??"–"}배</small></td><td>${e.per_fwd??"–"}배 추정</td></tr>
+      ${e.payout_fwd!=null?`<tr><td>배당성향 <small>현재 주당배당금 유지 시</small></td><td>${e.payout_fwd}% 추정</td></tr>`:""}
+    </table>`:""}
+    <p class="note" style="margin:10px 0 0">계절성 반영 추정 = ${prevY}년 연간 × (올해 누적 ÷ 전년 같은 기간 누적). 하반기 비중이 큰 업종도 왜곡이 적도록 단순 연환산 대신 이 값을 기준으로 씁니다.</p></div>`;
+}
+function discBlock(c){
+  const d = c.disc || []; if(!d.length) return "";
+  const fmt = x => x ? `${x.slice(2,4)}.${x.slice(4,6)}.${x.slice(6,8)}` : "";
+  return `<div class="block"><h4>최근 공시 <small style="font-weight:400;color:var(--muted)">${L.config.disclosure_days||120}일, ${d.length}건</small></h4><ul class="disc">${
+    d.slice(0,15).map(x => `<li><a href="https://dart.fss.or.kr/dsaf001/main.do?rcpNo=${x.no}" target="_blank" rel="noopener">${esc(x.t)}</a>${
+      (x.f||[]).map(f=>`<span class="fl bad">${esc(f)}</span>`).join("")}${(x.g||[]).map(f=>`<span class="fl good">${esc(f)}</span>`).join("")}<small>${fmt(x.d)}, ${esc(x.by||"")}</small></li>`).join("")}</ul>
+    ${d.length>15?`<p class="note" style="margin:6px 0 0">최근 15건만 표시. 나머지는 DART에서 확인하세요.</p>`:""}</div>`;
+}
+function analysisPrompt(c){
+  const e = c.est || {}, o = e.op || {};
+  const lines = [
+    `${c.name}(${c.code}) 투자 판단을 위해 추가 분석해 줘.`,
+    ``,
+    `[배당가치 노트 수치, 주가 ${fmtDate(L.price_date)} 기준]`,
+    `현재가 ${won(c.price)}원, 시가총액 ${eokTxt(c.mcap)}, 업종 ${c.sector}, 현재 감사인 ${c.auditor||"확인 안 됨"}`,
+    `현재 배당률 ${pct(c.yield)} (5년 평균 ${pct(c.yld_avg)}), 주당배당금 ${won(c.dps)}원, 배당성향 ${pct(c.payout,0)}, 연속 배당 ${c.consec}년`,
+    `PER ${c.per??"–"}배 (올해 추정 ${c.per_fwd??"–"}배), PBR ${c.pbr??"–"}배, 3년 평균 ROE ${pct(c.roe3)}`,
+    o.cum!=null ? `영업이익: ${L.fiscal_year}년 ${eok(o.last)}, ${e.year}년 ${e.label} 누적 ${eok(o.cum)} (전년 같은 기간 대비 ${sgn(o.yoy)}), 올해 추정 ${eok(o.seasonal ?? o.simple)} (전년 대비 ${sgn(o.vs_last)})` : null,
+    `선정 이유: ${c.reasons.join(" / ") || "–"}`,
+    `확인할 점: ${c.cautions.join(" / ") || "없음"}`,
+    (c.disc||[]).length ? `최근 공시: ${(c.disc||[]).slice(0,8).map(x=>`${x.d} ${x.t}`).join(" / ")}` : null,
+    (MEMO[c.code]||[]).length ? `지난 메모(${MEMO[c.code][0].d}): ${MEMO[c.code][0].t.replace(/\s+/g," ").slice(0,400)}` : null,
+    ``,
+    `웹에서 최근 공시, 기사, 증권사 리포트를 찾아보고 아래를 정리해 줘.`,
+    `1. 최근 실적 흐름과 올해·내년 실적 전망 (증권사 컨센서스가 있으면 위 추정치와 비교)`,
+    `2. 배당 정책 변화 (배당 확대·축소, 분기배당, 자사주, 밸류업 계획)`,
+    `3. 최근 공시와 기사에서 나온 특이사항 (지배구조, 소송, 증자·사채, 대주주 지분 변동 등)`,
+    `4. 증권사 리포트의 주요 논점과 목표주가 범위`,
+    `5. 주가가 싸게 거래되는 이유로 볼 만한 위험 요인`,
+    `6. 위 내용을 종합한 투자 판단 체크포인트`,
+    `7. 종합 의견: 배당과 시세차익을 함께 노리는 투자 논리가 성립하는지에 대한 너의 시각(긍정적/중립/부정적)과 핵심 근거, 반대 근거, 매수를 검토하기 전에 확인할 조건${(MEMO[c.code]||[]).length?", 지난 메모 이후 달라진 점":""}`,
+    `8. 마지막에 메모에 붙여넣을 3줄 요약 (시각, 핵심 이유, 다음에 확인할 것)`,
+  ];
+  return lines.filter(x => x !== null).join("\n");
+}
+async function copyPrompt(c){
+  const t = analysisPrompt(c);
+  try{ await navigator.clipboard.writeText(t); toast("복사했습니다. Claude 채팅에 붙여넣으세요"); }
+  catch(e){ window.prompt("아래 문구를 길게 눌러 복사하세요", t); }
+}
+
+/* ── 종목 메모 ── */
+const today = () => { const d = new Date(); return `${d.getFullYear()}.${String(d.getMonth()+1).padStart(2,"0")}.${String(d.getDate()).padStart(2,"0")}`; };
+function memoBlock(code){
+  const list = MEMO[code] || [];
+  return `<div class="block memo" id="memoBlock"><h4>내 메모 <small style="font-weight:400;color:var(--muted)">${list.length ? list.length+"건" : "이 기기에만 저장"}</small></h4>
+    <textarea id="memoText" placeholder="Claude 분석의 메모용 요약이나 매수·보류 이유를 적어 두세요"></textarea>
+    <div class="links" style="margin-top:8px"><button class="btn pri" id="memoSave">메모 저장</button></div>
+    ${list.length ? `<ul>${list.map((m,i) => `<li><small><span>${esc(m.d)}${m.p?`, 당시 ${won(m.p)}원`:""}</span><button data-del="${i}">삭제</button></small>${esc(m.t)}</li>`).join("")}</ul>` : ""}</div>`;
+}
+function bindMemo(code, rerender){
+  $("#memoSave").onclick = () => {
+    const t = $("#memoText").value.trim(); if(!t) return;
+    (MEMO[code] = MEMO[code] || []).unshift({d: today(), t, p: priceOf(code)});
+    store.set("dv.memos", MEMO); toast("메모를 저장했습니다"); rerender(); renderCand(); renderHold();
+  };
+  document.querySelectorAll("#memoBlock [data-del]").forEach(b => b.onclick = () => {
+    if(!confirm("이 메모를 지울까요?")) return;
+    MEMO[code].splice(+b.dataset.del, 1); if(!MEMO[code].length) delete MEMO[code];
+    store.set("dv.memos", MEMO); rerender(); renderCand(); renderHold();
+  });
+}
+function refreshMemo(code){
+  const old = $("#memoBlock"); if(!old) return;
+  old.outerHTML = memoBlock(code); bindMemo(code, () => refreshMemo(code));
+}
+function openMemo(code){
+  sheetBack = null;
+  $("#sheetPanel").innerHTML = `<div class="bar"><div><h3>${esc(nameOf(code))}</h3><div class="sub">${code}, 현재 ${won(priceOf(code))}원</div></div>
+    <button class="x" aria-label="닫기" id="closeSheet">×</button></div>${memoBlock(code)}`;
+  $("#closeSheet").onclick = closeSheet;
+  bindMemo(code, () => refreshMemo(code));
+  if(!$("#sheet").classList.contains("open")) history.pushState({v:"sheet"}, "");
+  $("#sheet").classList.add("open"); $("#sheetPanel").scrollTop = 0;
 }
 
 /* ── 바닥 신호와 겹치는 후보 ── */
@@ -328,7 +446,7 @@ function renderCand(){
     <div class="list">${list.map(c => `
       <button class="row" data-code="${c.code}">
         <span class="rk">${L.candidates.indexOf(c)+1}</span>
-        <span><span class="nm">${esc(c.name)}</span>${bm[c.code]?`<span class="bd s${bm[c.code].stage}">바닥${CIRC[bm[c.code].stage]||""}</span>`:""}${held.has(c.code)?`<span class="held">보유</span>`:""}${c.cautions.length?`<span class="flag">주의 ${c.cautions.length}</span>`:""}
+        <span><span class="nm">${esc(c.name)}</span>${bm[c.code]?`<span class="bd s${bm[c.code].stage}">바닥${CIRC[bm[c.code].stage]||""}</span>`:""}${held.has(c.code)?`<span class="held">보유</span>`:""}${MEMO[c.code]?`<span class="mm">메모</span>`:""}${c.cautions.length?`<span class="flag">주의 ${c.cautions.length}</span>`:""}
           <span class="meta" style="display:block">${esc(c.sector)}, ${c.market==="KOSPI"?"코스피":"코스닥"}, PER ${c.per??"–"}배, 감사 ${esc(firm(c.auditor))}</span></span>
         <span class="sc">${Math.round(c.score)}<span>점</span></span>
         <span class="body">${segbar(c.cats)}${band(c)}${c.reasons[0]?`<span class="why">${esc(c.reasons[0])}</span>`:""}</span>
@@ -374,6 +492,7 @@ function openDetail(code, fromList=false){
     <div class="block"><h4>배당률 밴드</h4>${band(c,true)}
       <p class="note" style="margin:16px 0 0">주당배당금 ${won(c.dps)}원 기준. 5년 평균 대비 ${c.yld_ratio?`${c.yld_ratio.toFixed(2)}배`:"–"} — 1보다 클수록 배당 기준으로 싸게 거래되는 상태입니다.</p></div>
     <div class="block"><h4>선정 이유</h4><ul class="pts">${c.reasons.map(r => `<li>${esc(r)}</li>`).join("") || "<li>세부 지표가 고르게 상위권</li>"}</ul></div>
+    ${estBlock(c)}
     ${c.cautions.length ? `<div class="block"><h4>확인할 점</h4><ul class="pts warn">${c.cautions.map(r => `<li>${esc(r)}</li>`).join("")}</ul></div>`:""}
     <div class="block"><h4>주요 지표</h4><table class="kv">
       <tr><td>현재 감사인 <small>최근 정기보고서 기준</small></td><td>${esc(c.auditor||"확인 안 됨")}</td></tr>
@@ -391,6 +510,16 @@ function openDetail(code, fromList=false){
       <tr><td>영업현금흐름 ÷ 순이익</td><td>${c.ocf_ni??"–"}배</td></tr>
       <tr><td>잉여현금흐름 ÷ 배당금 (3년)</td><td>${c.fcf_cov??"–"}배</td></tr>
     </table></div>
+    ${discBlock(c)}
+    <div class="block"><h4>추가 분석</h4>
+      <p class="note" style="margin:0 0 10px">아래 버튼으로 이 종목의 수치를 담은 요청 문구를 복사해 Claude 채팅에 붙여넣으면, 최근 공시·기사·증권사 리포트를 찾아 정리해 줍니다.</p>
+      <div class="links"><button class="btn pri" id="copyPrompt">분석 요청 문구 복사</button>
+        <a class="btn" href="https://claude.ai/new" target="_blank" rel="noopener">Claude 열기</a></div>
+      <div class="links" style="margin-top:8px">
+        <a class="btn" href="https://search.naver.com/search.naver?where=news&sort=1&query=${encodeURIComponent(c.name)}" target="_blank" rel="noopener">최신 기사</a>
+        <a class="btn" href="https://finance.naver.com/research/company_list.naver?searchType=itemCode&itemCode=${c.code}" target="_blank" rel="noopener">증권사 리포트</a>
+      </div></div>
+    ${memoBlock(c.code)}
     <div class="block charts">
       <div class="chart"><h5>주당배당금 (원)</h5>${bars(c.series.dps, ys, "var(--gold)")}</div>
       <div class="chart"><h5>공시 시가배당률 (%)</h5>${bars(c.series.yld, ys, "var(--gold)", "%", {fmt:v=>v.toFixed(1)})}</div>
@@ -407,6 +536,8 @@ function openDetail(code, fromList=false){
   $("#sheet").classList.add("open");
   $("#sheetPanel").scrollTop = 0;
   $("#closeSheet").onclick = closeSheet;
+  $("#copyPrompt").onclick = () => copyPrompt(c);
+  bindMemo(c.code, () => refreshMemo(c.code));
   const a = $("#addFromDetail"); if(a) a.onclick = () => { closeSheet(); go(1); setTimeout(() => { $("#f-stock").value = `${c.name} (${c.code})`; $("#f-qty").focus(); }, 300); };
 }
 function hideSheet(){ $("#sheet").classList.remove("open"); }
@@ -449,7 +580,8 @@ function renderHold(){
           <div class="meta">감사 ${esc(firm(r.auditor))}</div>
           <div class="meta">배당 ${r.div?won(r.div)+"원":"정보 없음"}${r.yoc?`, 매입가 대비 ${pct(r.yoc,2)}`:""}</div></div>
         <div class="r"><b>${won(r.value)}</b><div class="${cls(r.pl)}" style="font-size:13px">${signPct(r.plp)}</div>
-          <button class="btn" style="padding:3px 9px;font-size:12px;margin-top:4px" data-edit="${r.code}">수정</button></div>
+          <button class="btn" style="padding:3px 9px;font-size:12px;margin-top:4px" data-edit="${r.code}">수정</button>
+          <button class="btn" style="padding:3px 9px;font-size:12px;margin-top:4px" data-memo="${r.code}">메모${MEMO[r.code]?" "+MEMO[r.code].length:""}</button></div>
         <div class="wbar"><b style="width:${total? r.value/total*100 : 0}%"></b></div>
       </div>`).join("")}</div>` : `<div class="empty"><b>아직 보유 종목이 없습니다</b>아래에서 종목과 수량을 입력하거나, 후보 상세 화면의 보유에 추가를 누르세요.</div>`}
     <form class="add" id="addForm" autocomplete="off">
@@ -474,6 +606,7 @@ function renderHold(){
   };
   $("#f-clear").onclick = () => { $("#f-stock").value=""; $("#f-qty").value=""; $("#f-avg").value=""; };
   $("#cashForm").onsubmit = e => { e.preventDefault(); PF.cash = +$("#f-cash").value||0; store.set("dv.portfolio", PF); renderAll(); go(1); };
+  el.querySelectorAll("[data-memo]").forEach(b => b.onclick = () => findCand(b.dataset.memo) ? openDetail(b.dataset.memo) : openMemo(b.dataset.memo));
   el.querySelectorAll("[data-edit]").forEach(b => b.onclick = () => {
     const h = PF.holdings.find(x => x.code===b.dataset.edit);
     $("#f-stock").value = `${nameOf(h.code)} (${h.code})`; $("#f-qty").value = h.qty; $("#f-avg").value = h.avg;
@@ -573,7 +706,7 @@ function renderSet(){
   const el = $("#p-set");
   const C = L?.config;
   el.innerHTML = `<h2>보유 내역 백업</h2>
-    <p class="lede">보유 종목과 리밸런싱 규칙은 이 기기의 브라우저에만 있습니다. 기기를 바꾸거나 브라우저 데이터를 지우기 전에 백업 파일을 내려받으세요.</p>
+    <p class="lede">보유 종목, 종목 메모, 리밸런싱 규칙은 이 기기의 브라우저에만 있습니다. 기기를 바꾸거나 브라우저 데이터를 지우기 전에 백업 파일을 내려받으세요.</p>
     <div class="links"><button class="btn pri" id="bk">백업 파일 내려받기</button><label class="btn" for="rs">백업에서 복원</label><input type="file" id="rs" accept="application/json" hidden><button class="btn danger" id="rz">보유 내역 지우기</button></div>
     ${C ? `<h2>선정 기준</h2><div class="block"><table class="kv">
       <tr><td>시가총액</td><td>${C.min_mcap_eok.toLocaleString("ko-KR")}억 이상${C.include_kosdaq?"":" (코스피만)"}</td></tr>
@@ -588,12 +721,12 @@ function renderSet(){
     <p class="note">마지막 수집 ${esc(L.updated)}, 사업연도 ${L.fiscal_year}, 최근 분기 ${esc(L.quarter||"없음")}, 1차 통과 기업 PER 중앙값 ${L.market_per??"–"}배.</p>`:""}
     <p class="note">이 앱의 점수와 제안은 공시 데이터를 정해진 규칙으로 계산한 결과이며, 매매 판단은 직접 확인한 뒤 내리세요.</p>`;
   $("#bk").onclick = () => {
-    const blob = new Blob([JSON.stringify({portfolio:PF, rules:RULES, saved:new Date().toISOString()}, null, 1)], {type:"application/json"});
+    const blob = new Blob([JSON.stringify({portfolio:PF, rules:RULES, memos:MEMO, saved:new Date().toISOString()}, null, 1)], {type:"application/json"});
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `배당가치노트-백업-${new Date().toISOString().slice(0,10)}.json`; a.click();
   };
   $("#rs").onchange = async e => {
     const f = e.target.files[0]; if(!f) return;
-    try{ const j = JSON.parse(await f.text()); if(!j.portfolio?.holdings) throw 0; PF = j.portfolio; RULES = {...RULES, ...(j.rules||{})}; store.set("dv.portfolio",PF); store.set("dv.rules",RULES); renderAll(); alert(`${PF.holdings.length}종목을 복원했습니다.`); }
+    try{ const j = JSON.parse(await f.text()); if(!j.portfolio?.holdings) throw 0; PF = j.portfolio; RULES = {...RULES, ...(j.rules||{})}; if(j.memos){ MEMO = j.memos; store.set("dv.memos", MEMO); } store.set("dv.portfolio",PF); store.set("dv.rules",RULES); renderAll(); alert(`${PF.holdings.length}종목을 복원했습니다.`); }
     catch(_){ alert("백업 파일 형식이 아닙니다."); }
   };
   $("#rz").onclick = () => { if(confirm("이 기기의 보유 내역을 모두 지웁니다. 계속할까요?")){ PF = {holdings:[], cash:0}; store.set("dv.portfolio",PF); renderAll(); } };
