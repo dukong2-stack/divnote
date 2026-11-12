@@ -247,6 +247,11 @@ let MEMO = store.get("dv.memos", {});
 let RULES = store.get("dv.rules", {targetN:12, maxW:10, secCap:25, band:5, gap:20});
 let L = null, U = null, P = null, H = [], B = null, SNAP = [];
 let candFilter = "all";
+let ALT = store.get("dv.alt", {});
+const effScore = c => (ALT[c.code] && c.score_alt != null) ? c.score_alt : c.score;
+const effCats = c => (ALT[c.code] && c.cats_alt) ? c.cats_alt : c.cats;
+function candSorted(){ return [...L.candidates].sort((a,b) => effScore(b) - effScore(a)); }
+function rankOf(code){ return candSorted().findIndex(c => c.code === code) + 1; }
 
 async function getJSON(path){
   const r = await fetch(`${path}?t=${Date.now()}`, {cache:"no-store"});
@@ -309,9 +314,21 @@ function estBlock(c){
     ${v.seasonal!=null?`<tr><td>① 계절성 반영 <small>${prevY}년 연간 × 누적 증가율</small></td><td>${eok(v.seasonal)}</td></tr>`:""}
     ${v.runrate!=null?`<tr><td>② 최근 분기 기준 <small>누적 + ${qn} 실적 × 남은 ${4-e.nq}개 분기</small></td><td>${eok(v.runrate)}</td></tr>`:""}
     ${v.simple!=null?`<tr><td>③ 단순 연환산 <small>누적 × 4 ÷ ${e.nq}</small></td><td>${eok(v.simple)}</td></tr>`:""}
-    <tr><td><b>${y}년 적용 추정</b> <small>${esc(v.method||"")}${v.lo!=null&&v.hi!=null&&v.lo!==v.hi?`, 범위 ${eok(v.lo)}~${eok(v.hi)}`:""}${v.uncertain?" — 범위 넓음":""}</small></td><td><b>${eok(v.base)}</b> <small class="${cls(v.vs_last)}">${sgn(v.vs_last)}</small></td></tr>
+    <tr><td><b>${y}년 앱 추정</b> <small>${esc(v.method||"")}${v.lo!=null&&v.hi!=null&&v.lo!==v.hi?`, 범위 ${eok(v.lo)}~${eok(v.hi)}`:""}${v.uncertain?" — 범위 넓음":""}</small></td><td><b>${eok(v.app_base ?? v.base)}</b> <small class="${cls(v.app_vs ?? v.vs_last)}">${sgn(v.app_vs ?? v.vs_last)}</small></td></tr>
   </table>`; };
+  const a = e.app || {}, cs = e.cons;
+  const srcBox = `<div class="note" style="margin:0 0 10px;padding:10px 12px;border:1px solid var(--line);border-radius:10px">
+    <b>점수에 쓴 추정: ${esc(e.src||"앱 추정")}</b> — 추정 PER ${e.per_fwd??"–"}배${e.op?`, 영업이익 ${eok(e.op.base)} (${sgn(e.op.vs_last)})`:""}<br>
+    ${e.src==="컨센서스" ? `네이버 증권 컨센서스(증권사 추정 평균): EPS ${won(cs.eps)}원${cs.op!=null?`, 영업이익 ${eok(cs.op)}`:""}${cs.ni!=null?`, 순이익 ${eok(cs.ni)}`:""}. 아래 ①②③은 앱 자체 계산으로 참고용입니다.`
+      : `컨센서스가 없어 최근 4개 분기 실적${c.fin?"":", 계절성 반영 추정, 앱 추정"} 중 가장 보수적인 값을 씁니다.`}
+    ${a.per_fwd?`<br>앱 원래 추정: 추정 PER ${a.per_fwd}배${a.op!=null?`, 영업이익 ${eok(a.op)} (${sgn(a.op_vs)})`:""}`:""}
+    ${e.margin_hint?`<br><b>이익률 상승 성격:</b> ${esc(e.margin_hint)}`:""}
+    ${c.prelim?`<br>${esc(c.prelim)}`:""}
+    ${e.alt && c.score_alt!=null ? `<br><button class="btn" id="altBtn" style="margin-top:8px">${ALT[c.code]?"보수 추정으로 되돌리기":`원래 추정으로 보기 (점수 ${Math.round(c.score_alt)})`}</button>
+      <span style="display:block;margin-top:4px">확인해 보니 이익 증가가 일시적이지 않다고 판단되면 원래 추정으로 볼 수 있습니다. 선택은 이 기기에만 저장됩니다.</span>`:""}
+  </div>`;
   return `<div class="block est"><h4>${y}년 실적 추정 <small style="font-weight:400;color:var(--muted)">${e.label} 공시 기준</small></h4>
+    ${srcBox}
     ${part("op","영업이익")}
     ${["rev","ni"].some(k=>e[k]) ? `<h5>매출액·순이익 <small style="font-weight:400;color:var(--muted)">연결</small></h5><table class="kv">${[["rev","매출액"],["ni","순이익"]].filter(([k])=>e[k]).map(([k,t]) => { const v = e[k];
       return `<tr><td>${t} <small>${e.label} 누적 ${eok(v.cum)}</small> <small class="${cls(v.yoy)}">${sgn(v.yoy)}</small></td><td>${eok(v.norm ?? v.base)} 추정${v.norm?" (정상화)":""} <small class="${cls(v.vs_last)}">${sgn(v.vs_last)}</small></td></tr>`; }).join("")}</table>`:""}
@@ -320,7 +337,7 @@ function estBlock(c){
       <tr><td>PER <small>${fmtDate(L.price_date)} 종가 ÷ ${y}년 추정 지배주주 순이익</small></td><td>${e.per_fwd??"–"}배 추정</td></tr>
       ${e.payout_fwd!=null?`<tr><td>배당성향 <small>기대 주당배당금 기준</small></td><td>${e.payout_fwd}% 추정</td></tr>`:""}
     </table>`:""}
-    <p class="note" style="margin:10px 0 0">${c.fin?"금융업 성격이라 분기 이익 변동이 커서 최근 분기 기준만 씁니다.":"하반기 비중이 큰 회사는 ①, 실적이 꺾이는 회사는 ②, 회복하는 회사는 ③이 현실에 가까워, 세 값의 중앙값을 점수와 추정 PER에 씁니다."}</p></div>`;
+    <p class="note" style="margin:10px 0 0">위 표의 '앱 추정'은 ①②③으로 계산한 값입니다. 점수에는 맨 위 상자의 추정(컨센서스 또는 보수 추정)을 씁니다.</p></div>`;
 }
 function discBlock(c){
   const d = c.disc || []; if(!d.length && !c.routine_n) return "";
@@ -347,14 +364,17 @@ function analysisPrompt(c){
     c.net_cash!=null ? `순현금 ${eokTxt(c.net_cash)} (시총의 ${c.net_cash_ratio}%)` : null,
     (c.risk||[]).length ? `최근 3년 위험 공시: ${c.risk.map(h=>`${h.t}(${h.y.join(",")})`).join(", ")}` : null,
     o.cum!=null ? `영업이익(${e.year}년 ${e.label} 기준): ${L.fiscal_year}년 연간 ${eok(o.last)}, ${e.year}년 누적 ${eok(o.cum)} (전년 같은 기간 대비 ${sgn(o.yoy)})${o.q!=null?`, 최근 분기 3개월 ${eok(o.q)} (전년 같은 분기 대비 ${sgn(o.q_yoy)})`:""}, 앱 연간 추정 ${eok(o.base)} (${o.method||""}, 계절성 ${eok(o.seasonal)} / 최근 분기 기준 ${eok(o.runrate)} / 단순 연환산 ${eok(o.simple)}, 전년 대비 ${sgn(o.vs_last)})` : null,
-    e.eps_fwd ? `추정 PER ${c.per_fwd??"–"}배는 위 추정 순이익과 ${fmtDate(L.price_date)} 종가로 앱이 계산한 값` : null,
+    e.eps_fwd ? `점수에 쓴 추정(${e.src||"앱 추정"}): 추정 PER ${c.per_fwd??"–"}배${e.app&&e.app.per_fwd?`, 앱 원래 추정 PER ${e.app.per_fwd}배`:""}${e.cons?`, 컨센서스 EPS ${won(e.cons.eps)}원`:""}` : null,
+    e.margin_hint ? `이익률 상승 성격(앱 단서): ${e.margin_hint}` : null,
+    c.tv20!=null ? `20일 평균 거래대금 ${c.tv20}억` : null,
+    (c.group||[]).length ? `지분으로 연결된 다른 후보: ${c.group.join(", ")}` : null,
     `선정 이유: ${c.reasons.join(" / ") || "–"}`,
     `확인할 점: ${c.cautions.join(" / ") || "없음"}`,
     (c.disc||[]).length ? `최근 공시: ${(c.disc||[]).slice(0,8).map(x=>`${x.d} ${x.t}`).join(" / ")}` : null,
     (MEMO[c.code]||[]).length ? `지난 메모(${MEMO[c.code][0].d}): ${MEMO[c.code][0].t.replace(/\s+/g," ").slice(0,400)}` : null,
     ``,
     `웹에서 최근 공시, 기사, 증권사 리포트를 찾아보고 아래를 정리해 줘.`,
-    `1. 최근 실적 흐름과 올해·내년 실적 전망 (증권사 컨센서스가 있으면 위 추정치와 비교)`,
+    `1. 최근 실적 흐름과 올해·내년 실적 전망 (증권사 컨센서스가 있으면 위 추정치와 비교). 최근 이익률이 평소보다 높다면 그 이유(가격·원가 스프레드, 제품 구성, 일회성, 수요 증가)와 지속 가능성`,
     `2. 배당 정책 변화 (배당 확대·축소, 분기배당, 자사주, 밸류업 계획)와 이를 근거로 한 올해 기대 주당배당금·기대 배당률 추정 (앱 기대치와 비교)`,
     `3. 최근 공시와 기사에서 나온 특이사항 (지배구조, 소송, 증자·사채, 대주주 지분 변동 등)`,
     `4. 증권사 리포트의 주요 논점과 목표주가 범위`,
@@ -524,7 +544,7 @@ function renderCand(){
   if(!L){ el.innerHTML = `<div class="empty" style="margin-top:12px"><b>아직 수집된 데이터가 없습니다</b>저장소의 Actions 탭에서 collect 워크플로를 한 번 실행하면 10~20분 뒤 후보가 표시됩니다.</div>`; return; }
   const held = heldCodes();
   const bm = badakMap();
-  let list = L.candidates;
+  let list = candSorted();
   if(candFilter==="new") list = list.filter(c => !held.has(c.code));
   if(candFilter==="clean") list = list.filter(c => !c.cautions.length);
   el.innerHTML = `
@@ -533,17 +553,18 @@ function renderCand(){
     <p class="lede">${L.fiscal_year}년 사업보고서 기준. 평가 ${L.counts.universe}종목 중 이익 기준 ${L.counts.stage1}종목, 배당 기준까지 ${L.counts.stage2}종목 통과.</p>
     ${B ? (() => { const ov = overlaps(); const cnt = k => ov.filter(o => o.b.stage===k).length;
       return `<button class="ovl" id="ovlBtn"><span class="n">${ov.length}</span><span class="t">바닥 신호와 겹치는 후보<small>${ov.length ? `③ ${cnt(3)}, ② ${cnt(2)}, ① ${cnt(1)} — 눌러서 목록 보기` : "지금은 겹치는 종목이 없습니다"}</small></span><span class="go">›</span></button>`; })() : ""}
+    ${(L.conc||[]).length ? `<p class="note" style="color:var(--warn,#b45309);margin:0 0 8px">후보 ${L.candidates.length}종목 중 ${L.conc.map(x=>`${esc(x.k)} ${x.n}개(${Math.round(x.n/L.candidates.length*100)}%)`).join(", ")} — 한 업종에 쏠려 있습니다. 같은 경기 흐름에 함께 움직일 수 있으니 나눠 담으세요.</p>` : ""}
     <div class="chips" role="group">
       ${[["all","전체"],["new","미보유"],["clean","주의사항 없음"]].map(([k,t]) => `<button class="chip" data-f="${k}" aria-pressed="${candFilter===k}">${t}</button>`).join("")}
     </div>
     <div class="legend">${Object.values(CAT).map(([t,c]) => `<span><i style="background:${c}"></i>${t}</span>`).join("")}<span>세로 눈금은 5년 평균 배당률</span></div>
     <div class="list">${list.map(c => `
       <button class="row" data-code="${c.code}">
-        <span class="rk">${L.candidates.indexOf(c)+1}</span>
-        <span><span class="nm">${esc(c.name)}</span>${bm[c.code]?`<span class="bd s${bm[c.code].stage}">바닥${CIRC[bm[c.code].stage]||""}</span>`:""}${held.has(c.code)?`<span class="held">보유</span>`:""}${MEMO[c.code]?`<span class="mm">메모</span>`:""}${c.cautions.length?`<span class="flag">주의 ${c.cautions.length}</span>`:""}
+        <span class="rk">${rankOf(c.code)}</span>
+        <span><span class="nm">${esc(c.name)}</span>${ALT[c.code]&&c.score_alt!=null?`<span class="mm">원래 추정</span>`:""}${c.tv20!=null&&c.tv20<(L.config.low_trading_value_eok||5)?`<span class="flag">거래 적음</span>`:""}${(c.group||[]).length?`<span class="mm">계열 ${c.group.length+1}</span>`:""}${bm[c.code]?`<span class="bd s${bm[c.code].stage}">바닥${CIRC[bm[c.code].stage]||""}</span>`:""}${held.has(c.code)?`<span class="held">보유</span>`:""}${MEMO[c.code]?`<span class="mm">메모</span>`:""}${c.cautions.length?`<span class="flag">주의 ${c.cautions.length}</span>`:""}
           <span class="meta" style="display:block">${esc(c.sector)}, ${c.market==="KOSPI"?"코스피":"코스닥"}, PER ${c.per??"–"}배, 감사 ${esc(firm(c.auditor))}</span></span>
-        <span class="sc">${Math.round(c.score)}<span>점</span></span>
-        <span class="body">${segbar(c.cats)}${band(c)}${c.reasons[0]?`<span class="why">${esc(c.reasons[0])}</span>`:""}</span>
+        <span class="sc">${Math.round(effScore(c))}<span>점</span></span>
+        <span class="body">${segbar(effCats(c))}${band(c)}${c.reasons[0]?`<span class="why">${esc(c.reasons[0])}</span>`:""}</span>
       </button>`).join("") || `<div class="empty"><b>조건에 맞는 종목이 없습니다</b>필터를 전체로 바꿔 보세요.</div>`}</div>
     ${L.others.length ? `<p class="note">기준은 통과했지만 순위 밖인 종목 ${L.others.length}개는 보유 종목 비교에 사용됩니다.</p>`:""}`;
   el.querySelectorAll(".chip").forEach(b => b.onclick = () => { candFilter = b.dataset.f; renderCand(); });
@@ -577,14 +598,14 @@ function findCand(code){
 function openDetail(code, fromList=false){
   const c = findCand(code); if(!c) return;
   const ys = L.years;
-  const rank = L.candidates.indexOf(c)+1;
+  const rank = rankOf(code);
   const held = heldCodes().has(code);
   $("#sheetPanel").innerHTML = `
     <div class="bar"><div><h3>${esc(c.name)}</h3><div class="sub">${c.code}, ${esc(c.sector)}, ${c.market==="KOSPI"?"코스피":"코스닥"}, 시총 ${eokTxt(c.mcap)}, ${won(c.price)}원</div></div>
       <button class="x" aria-label="닫기" id="closeSheet">×</button></div>
     ${(() => { const b = badakMap()[c.code]; return b ? `<div class="block" style="padding:10px 16px"><span class="bd s${b.stage}" style="margin:0 8px 0 0">${STG[b.stage]}</span>바닥 신호 점수 ${Math.round(b.score)}, ${esc(b.since||"")} 진입</div>` : ""; })()}
-    <div class="block"><div class="scoreline"><div><div class="big">${Math.round(c.score)}</div><div class="sub">후보 ${rank}위</div></div>
-      <div class="cats">${Object.entries(CAT).map(([k,[t,col]]) => `<div class="cat"><span>${t}</span><span class="t"><b style="width:${c.cats[k]}%;background:${col}"></b></span><em>${c.cats[k]}</em></div>`).join("")}</div></div></div>
+    <div class="block"><div class="scoreline"><div><div class="big">${Math.round(effScore(c))}</div><div class="sub">후보 ${rank}위${ALT[c.code]&&c.score_alt!=null?"<br>원래 추정 적용":""}</div></div>
+      <div class="cats">${Object.entries(CAT).map(([k,[t,col]]) => `<div class="cat"><span>${t}</span><span class="t"><b style="width:${effCats(c)[k]}%;background:${col}"></b></span><em>${effCats(c)[k]}</em></div>`).join("")}</div></div></div>
     ${SNAP.length ? `<div class="block" style="padding:10px 16px"><span style="font-size:13px;color:var(--muted)">순위 변화</span>${rankHistory(c.code)}</div>`:""}
     <div class="block"><h4>배당률 밴드</h4>${band(c,true)}
       <p class="note" style="margin:16px 0 0">${c.exp_why ? `기대 주당배당금 ${won(c.dps_exp)}원 ÷ ${fmtDate(L.price_date)} 종가. ${L.fiscal_year}년 실제 배당 ${won(c.dps)}원 기준 표시 배당률은 ${pct(c.yield_shown)}이지만, ${esc(c.exp_why)}.` : `${L.fiscal_year}년 주당배당금 ${won(c.dps)}원${c.split_adj?"(현재 주식수 기준 환산)":""} ÷ ${fmtDate(L.price_date)} 종가.`} 5년 평균 대비 ${c.yld_ratio?`${c.yld_ratio.toFixed(2)}배`:"–"} — 1보다 클수록 배당 기준으로 싸게 거래되는 상태입니다.${c.band_adj?` 배당성향이 ${pct(c.payout,0)}로 바뀌어 과거 배당률을 현재 배당성향 기준으로 환산해 비교했습니다.`:""}${c.dps_policy?` 배당성향 ${pct(c.payout,0)}를 유지하면 올해 주당배당금은 약 ${won(c.dps_policy)}원(${pct(c.dps_policy/c.price*100)}) 수준입니다.`:""}${c.sep_tax?` <b>${L.fiscal_year}년 배당은 분리과세 요건(설정 기준)에 해당합니다.</b>`:""}</p></div>
@@ -642,6 +663,7 @@ function openDetail(code, fromList=false){
   $("#sheet").classList.add("open");
   $("#sheetPanel").scrollTop = 0;
   $("#closeSheet").onclick = closeSheet;
+  const ab = $("#altBtn"); if(ab) ab.onclick = () => { if(ALT[code]) delete ALT[code]; else ALT[code] = true; store.set("dv.alt", ALT); renderCand(); openDetail(code); };
   $("#copyPrompt").onclick = () => copyPrompt(c);
   bindMemo(c.code, () => refreshMemo(c.code));
   const a = $("#addFromDetail"); if(a) a.onclick = () => { closeSheet(); go(1); setTimeout(() => { $("#f-stock").value = `${c.name} (${c.code})`; $("#f-qty").focus(); }, 300); };

@@ -12,12 +12,19 @@
   "disclosure_days": 120,
   "normal_tax_rate": 22,
   "big_invest_pct": 10,
-  "sep_tax": {"payout_min": 40, "alt_payout_min": 25, "alt_growth_min": 10},
+  "sep_tax": {
+    "payout_min": 40,
+    "alt_payout_min": 25,
+    "alt_growth_min": 10
+  },
   "top_n": 30,
   "weights": {
     "value": 30,
     "dividend": 25,
     "quality": 25,
     "growth": 20
-  }
+  },
+  "min_trading_value_eok": 1,
+  "low_trading_value_eok": 5,
+  "risk_penalty": 15
 }
