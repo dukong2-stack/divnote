@@ -491,38 +491,38 @@ def _cells(row):
             for c in re.findall(r"<t[hd][^>]*>(.*?)</t[hd]>", row, re.S | re.I)]
 
 
+NSAMPLE = {"done": False}
+
+
 def naver_consensus(code, year):
-    """네이버 종목 화면 '기업실적분석' 표의 올해 추정(E) 영업이익·순이익(억원)·EPS(원). 없으면 None"""
+    """네이버 증권 모바일 API의 추정 EPS·PER(증권사 컨센서스). 없으면 None.
+    (네이버 PC 종목 화면이 바뀌어 표를 읽을 수 없어 API를 씀)"""
     try:
-        r = S.get("https://finance.naver.com/item/main.naver", params={"code": code}, headers=NHDR, timeout=20)
-        html = r.content.decode("euc-kr", errors="replace")
+        r = S.get(f"https://m.stock.naver.com/api/stock/{code}/integration", headers=NHDR, timeout=20)
+        j = r.json()
     except Exception:  # noqa: BLE001
         return None
-    m = re.search(r'class="section cop_analysis".*?<table[^>]*>(.*?)</table>', html, re.S)
-    if not m:
-        return None
-    rows = re.findall(r"<tr[^>]*>(.*?)</tr>", m.group(1), re.S | re.I)
-    col = None
-    for row in rows[:3]:
-        hs = _cells(row)
-        for j, h in enumerate(hs[:4]):
-            if "(E)" in h and h.startswith(str(year)):
-                col = j
-        if col is not None:
-            break
-    if col is None:
-        return None
+    if not NSAMPLE["done"]:
+        NSAMPLE["done"] = True
+        (DATA / "cache").mkdir(parents=True, exist_ok=True)
+        (DATA / "cache" / "naver_integration_sample.json").write_text(json.dumps(j, ensure_ascii=False)[:30000], encoding="utf-8")
+    want = {"cnseps": "eps", "추정eps": "eps", "cnsper": "per", "추정per": "per"}
     out = {}
-    for row in rows:
-        cs = _cells(row)
-        if len(cs) < 5:
-            continue
-        lab = cs[0].replace(" ", "")
-        vals = cs[1:]
-        key = "op" if lab == "영업이익" else "ni" if lab == "당기순이익" else "eps" if lab.startswith("EPS") else None
-        if key and key not in out and col < len(vals):
-            out[key] = num(vals[col])
-    return out if out.get("eps") or out.get("op") else None
+
+    def walk(o):
+        if isinstance(o, dict):
+            k = str(o.get("code") or o.get("key") or "").replace(" ", "").lower()
+            if k in want and "value" in o and want[k] not in out:
+                v = num(re.sub(r"[^0-9.,\-]", "", str(o["value"])))
+                if v is not None:
+                    out[want[k]] = v
+            for v in o.values():
+                walk(v)
+        elif isinstance(o, list):
+            for v in o:
+                walk(v)
+    walk(j)
+    return {"eps": out["eps"]} if out.get("eps") and out["eps"] > 0 else None
 
 
 def trading_value(code):
@@ -668,10 +668,17 @@ def choose_est(rec, est, cons, TAX):
             nin["vs_last"] = r1((cons["ni"] / nin["last"] - 1) * 100) if nin.get("last") and nin["last"] > 0 else None
         est["eps_fwd"] = r1(cons["eps"], 0)
         est["per_fwd"] = r1(rec["price"] / cons["eps"])
-    else:
+    if not (cons and (cons.get("eps") or 0) > 0):
         est["src"] = "보수 추정"
-        fin = rec.get("fin")
-        if opn:
+    fin = rec.get("fin")
+    if opn and not (cons and cons.get("op") is not None):
+        ttm = rec["ttm_op"] / 1e8 if rec.get("ttm_op") else None
+        c = [x for x in ((ttm,) if fin else (opn["app_base"], opn.get("seasonal"), ttm)) if x is not None and x > 0]
+        if c:
+            opn["base"] = r1(min(c), 0)
+            opn["vs_last"] = r1((opn["base"] / opn["last"] - 1) * 100) if opn.get("last") and opn["last"] > 0 else None
+    if est.get("src") == "보수 추정":
+        if False and opn:
             ttm = rec["ttm_op"] / 1e8 if rec.get("ttm_op") else None
             c = [x for x in ((ttm,) if fin else (opn["base"], opn.get("seasonal"), ttm)) if x is not None and x > 0]
             if c:
