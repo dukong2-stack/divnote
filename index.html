@@ -830,12 +830,97 @@ function renderHist(){
 }
 
 /* ── 설정 ── */
+/* ── 엑셀 백업 ── */
+let xlsxLoading = null;
+function loadXLSX(){
+  if(window.XLSX) return Promise.resolve(window.XLSX);
+  return xlsxLoading = xlsxLoading || new Promise((ok, no) => {
+    const sc = document.createElement("script");
+    sc.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+    sc.onload = () => ok(window.XLSX); sc.onerror = () => { xlsxLoading = null; no(new Error("인터넷 연결을 확인하세요")); };
+    document.head.appendChild(sc);
+  });
+}
+const r2 = (v, d=2) => v==null || isNaN(v) ? "" : Math.round(v * 10**d) / 10**d;
+function sheet(X, rows, widths){
+  const ws = X.utils.aoa_to_sheet(rows);
+  ws["!cols"] = widths.map(w => ({wch:w}));
+  return ws;
+}
+async function exportExcel(){
+  const X = await loadXLSX();
+  toast("엑셀 파일을 만드는 중입니다");
+  const today = new Date().toISOString().slice(0,10);
+  const rows = portfolioRows();
+  const tv = rows.reduce((a,r)=>a+r.value,0), tc = rows.reduce((a,r)=>a+r.cost,0), td = rows.reduce((a,r)=>a+(r.div||0),0);
+  const wb = X.utils.book_new();
+  X.utils.book_append_sheet(wb, sheet(X, [
+    ["항목","값"],
+    ["내려받은 날짜", today],
+    ["주가 기준일", L ? fmtDate(L.price_date) : ""],
+    ["사업연도 기준", L ? `${L.fiscal_year}년` : ""],
+    ["최근 분기 자료", L?.quarter || ""],
+    ["투자 대기 현금", +PF.cash || 0],
+    ["보유 평가금액", Math.round(tv)],
+    ["보유 평가손익", Math.round(tv-tc)],
+    ["예상 연 배당(세전)", Math.round(td)],
+  ], [18, 16]), "요약");
+  X.utils.book_append_sheet(wb, sheet(X, [
+    ["종목코드","종목명","수량","평균단가","현재가","평가금액","평가손익","수익률(%)","예상 연배당","매입가 대비 배당률(%)","업종","현재 감사인"],
+    ...rows.map(r => [r.code, r.name, r.qty, r.avg, r.price, Math.round(r.value), Math.round(r.pl), r2(r.plp), r.div!=null?Math.round(r.div):"", r2(r.yoc), r.sector||"", r.auditor||""]),
+  ], [9, 16, 9, 11, 11, 13, 12, 9, 11, 12, 14, 16]), "보유");
+  const memoRows = [];
+  Object.entries(MEMO).forEach(([code, list]) => list.forEach(m => memoRows.push([code, nameOf(code), m.d, m.p ?? "", m.t])));
+  X.utils.book_append_sheet(wb, sheet(X, [["종목코드","종목명","작성일","당시 주가","메모"], ...memoRows], [9, 16, 11, 10, 80]), "메모");
+  if(L){
+    X.utils.book_append_sheet(wb, sheet(X, [
+      ["순위","종목명","종목코드","시장","업종","점수","가치","배당","퀄리티","성장","현재가","기대 배당률(%)","표시 배당률(%)","PER","PER 기준","올해 추정 PER","PBR","ROE 최근 4분기(%)","현재 감사인","보유","선정 이유","확인할 점"],
+      ...L.candidates.map((c,i) => [i+1, c.name, c.code, c.market==="KOSPI"?"코스피":"코스닥", c.sector, r2(c.score,1), c.cats.value, c.cats.dividend, c.cats.quality, c.cats.growth,
+        c.price, r2(c.yield), r2(c.yield_shown), r2(c.per,1), c.per_basis||"", r2(c.per_fwd,1), r2(c.pbr), r2(c.roe_ttm,1), c.auditor||"",
+        PF.holdings.some(h=>h.code===c.code)?"보유":"", (c.reasons||[]).join(" / "), (c.cautions||[]).join(" / ")]),
+    ], [5, 16, 9, 7, 12, 6, 5, 5, 6, 5, 10, 10, 10, 7, 12, 9, 6, 10, 16, 5, 60, 80]), "후보");
+  }
+  X.writeFile(wb, `배당가치노트-${today}.xlsx`);
+}
+async function importExcel(file){
+  const X = await loadXLSX();
+  const wb = X.read(await file.arrayBuffer(), {type:"array"});
+  const read = name => wb.Sheets[name] ? X.utils.sheet_to_json(wb.Sheets[name], {header:1, raw:true, defval:""}) : null;
+  const hold = read("보유");
+  if(!hold || !hold.length) throw new Error("'보유' 시트가 없습니다");
+  const H = hold[0].map(x => String(x).trim()), ci = n => H.indexOf(n);
+  const [iC, iQ, iA] = [ci("종목코드"), ci("수량"), ci("평균단가")];
+  if(iC < 0 || iQ < 0 || iA < 0) throw new Error("보유 시트에 종목코드·수량·평균단가 열이 필요합니다");
+  const holdings = [];
+  hold.slice(1).forEach(r => {
+    let code = String(r[iC]).trim(); if(/^\d{1,6}$/.test(code)) code = code.padStart(6, "0");
+    const qty = +String(r[iQ]).replace(/,/g,""), avg = +String(r[iA]).replace(/,/g,"");
+    if(/^[0-9A-Z]{6}$/.test(code) && qty > 0) holdings.push({code, qty, avg: avg || 0});
+  });
+  const sum = read("요약"); let cash = PF.cash || 0;
+  if(sum){ const row = sum.find(r => String(r[0]).trim()==="투자 대기 현금"); if(row) cash = +String(row[1]).replace(/,/g,"") || 0; }
+  const mm = read("메모"); let memos = null;
+  if(mm && mm.length > 1){
+    const M = mm[0].map(x => String(x).trim()); memos = {};
+    mm.slice(1).forEach(r => {
+      let code = String(r[M.indexOf("종목코드")]).trim(); if(/^\d{1,6}$/.test(code)) code = code.padStart(6, "0");
+      const t = String(r[M.indexOf("메모")] ?? "").trim(); if(!code || !t) return;
+      (memos[code] = memos[code] || []).push({d: String(r[M.indexOf("작성일")] ?? ""), p: +r[M.indexOf("당시 주가")] || null, t});
+    });
+  }
+  if(!confirm(`엑셀에서 보유 ${holdings.length}종목${memos?`, 메모 ${Object.values(memos).reduce((a,l)=>a+l.length,0)}건`:""}을 불러와 이 기기의 내용을 바꿉니다. 계속할까요?`)) return;
+  PF = {holdings, cash}; store.set("dv.portfolio", PF);
+  if(memos){ MEMO = memos; store.set("dv.memos", MEMO); }
+  renderAll(); toast(`${holdings.length}종목을 불러왔습니다`);
+}
+
 function renderSet(){
   const el = $("#p-set");
   const C = L?.config;
   el.innerHTML = `<h2>보유 내역 백업</h2>
     <p class="lede">보유 종목, 종목 메모, 리밸런싱 규칙은 이 기기의 브라우저에만 있습니다. 기기를 바꾸거나 브라우저 데이터를 지우기 전에 백업 파일을 내려받으세요.</p>
-    <div class="links"><button class="btn pri" id="bk">백업 파일 내려받기</button><label class="btn" for="rs">백업에서 복원</label><input type="file" id="rs" accept="application/json" hidden><button class="btn danger" id="rz">보유 내역 지우기</button></div>
+    <div class="links"><button class="btn pri" id="bkx">엑셀로 내려받기</button><button class="btn" id="bk">백업 파일(JSON)</button><label class="btn" for="rs">백업에서 복원</label><input type="file" id="rs" accept=".json,.xlsx,application/json" hidden><button class="btn danger" id="rz">보유 내역 지우기</button></div>
+    <p class="note">엑셀 파일에는 요약, 보유, 메모, 후보 시트가 들어 있습니다. 엑셀에서 보유 시트의 수량·평균단가를 고치거나 행을 추가한 뒤 "백업에서 복원"으로 다시 불러올 수도 있습니다. 종목코드는 6자리 그대로 두세요.</p>
     ${C ? `<h2>선정 기준</h2><div class="block"><table class="kv">
       <tr><td>시가총액</td><td>${C.min_mcap_eok.toLocaleString("ko-KR")}억 이상${C.include_kosdaq?"":" (코스피만)"}</td></tr>
       <tr><td>영업이익 흑자</td><td>최근 ${C.min_profit_years}년 연속</td></tr>
@@ -852,8 +937,10 @@ function renderSet(){
     const blob = new Blob([JSON.stringify({portfolio:PF, rules:RULES, memos:MEMO, saved:new Date().toISOString()}, null, 1)], {type:"application/json"});
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `배당가치노트-백업-${new Date().toISOString().slice(0,10)}.json`; a.click();
   };
+  $("#bkx").onclick = () => exportExcel().catch(err => alert("엑셀 파일을 만들지 못했습니다: " + err.message));
   $("#rs").onchange = async e => {
     const f = e.target.files[0]; if(!f) return;
+    if(/\.xlsx$/i.test(f.name)){ importExcel(f).catch(err => alert("엑셀 파일을 읽지 못했습니다: " + err.message)); e.target.value = ""; return; }
     try{ const j = JSON.parse(await f.text()); if(!j.portfolio?.holdings) throw 0; PF = j.portfolio; RULES = {...RULES, ...(j.rules||{})}; if(j.memos){ MEMO = j.memos; store.set("dv.memos", MEMO); } store.set("dv.portfolio",PF); store.set("dv.rules",RULES); renderAll(); alert(`${PF.holdings.length}종목을 복원했습니다.`); }
     catch(_){ alert("백업 파일 형식이 아닙니다."); }
   };
