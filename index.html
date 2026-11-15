@@ -989,20 +989,22 @@ window.addEventListener("popstate", () => {
 /* ── 증권통 열기: 종목명 복사 → 앱 실행 (안드로이드) ── */
 const TONG_PKG = "semaphore.stockclient";
 async function copyText(t){
-  try{ await navigator.clipboard.writeText(t); return true; }catch(e){
-    const x = document.createElement("textarea"); x.value = t; document.body.appendChild(x); x.select();
-    let ok = false; try{ ok = document.execCommand("copy"); }catch(_){} x.remove(); return ok;
-  }
+  const x = document.createElement("textarea"); x.value = t; x.setAttribute("readonly",""); x.style.position = "fixed"; x.style.opacity = "0";
+  document.body.appendChild(x); x.select(); x.setSelectionRange(0, t.length);
+  let ok = false; try{ ok = document.execCommand("copy"); }catch(_){} x.remove();
+  if(!ok){ try{ await navigator.clipboard.writeText(t); ok = true; }catch(_){} }
+  return ok;
 }
 function launchTong(){
   if(!/Android/i.test(navigator.userAgent)) return;
-  const fb = encodeURIComponent(`https://play.google.com/store/apps/details?id=${TONG_PKG}`);
-  setTimeout(() => { location.href = `intent://#Intent;package=${TONG_PKG};S.browser_fallback_url=${fb};end`; }, 700);
+  // 웹 페이지로 빠지지 않도록 대체 주소 없이 앱 실행 화면(LAUNCHER)을 직접 호출
+  const url = `intent:#Intent;action=android.intent.action.MAIN;category=android.intent.category.LAUNCHER;package=${TONG_PKG};end`;
+  setTimeout(() => { const a = document.createElement("a"); a.href = url; a.rel = "noopener"; document.body.appendChild(a); a.click(); a.remove(); }, 400);
 }
 async function openTong(code){
   const name = nameOf(code);
-  await copyText(name);
-  toast(`${name} 복사됨 — 증권통 검색창에 붙여넣기 하세요`);
+  const ok = await copyText(name);
+  toast(ok ? `${name} 복사됨 — 증권통 검색창에 붙여넣기 하세요` : `${name} — 복사가 안 돼 직접 입력하세요`);
   launchTong();
 }
 document.addEventListener("click", e => { const b = e.target.closest("[data-tong]"); if(b){ e.preventDefault(); openTong(b.dataset.tong); } });
