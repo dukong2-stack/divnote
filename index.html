@@ -197,6 +197,9 @@ table.kv td small.up{color:var(--up)}table.kv td small.down{color:var(--down)}
 .status ul{margin:6px 0 0;padding-left:18px}
 .rh{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
 .rh span{font-size:12px;border:1px solid var(--line);border-radius:999px;padding:2px 9px;background:var(--bg)}
+.rkc{font-size:11px;font-weight:600;margin-left:6px;vertical-align:2px;color:var(--muted)}
+.rkc.up{color:var(--up)}.rkc.dn{color:var(--down)}.rkc.new{color:#fff;background:var(--celadon);border-radius:4px;padding:0 5px}
+.wsum{margin:10px 0 0;padding:8px 10px;border-radius:8px;background:var(--ok-bg);font-size:13px}
 .wbox summary{cursor:pointer;list-style:none;font-size:14px}
 .wbox summary::-webkit-details-marker{display:none}
 .wbox summary small{color:var(--muted);font-weight:400;margin-left:4px}
@@ -278,12 +281,25 @@ function candSorted(){
   if(!isCustom()) return [...L.candidates].sort((a,b) => effScore(b) - effScore(a));
   return [...L.candidates, ...(L.others||[])].sort((a,b) => effScore(b) - effScore(a)).slice(0, L.config.top_n || 30);
 }
+function baseRank(code){ const i = L.candidates.findIndex(c => c.code===code); return i>=0 ? i+1 : (U?.u?.[code]?.rk || null); }
+function rkBadge(c){
+  const b = baseRank(c.code), r = rankOf(c.code);
+  if(!b || !r || b===r) return `<span class="rkc">–</span>`;
+  if(b > (L.config.top_n||30)) return `<span class="rkc new">새로 (기본 ${b}위)</span>`;
+  return b > r ? `<span class="rkc up">▲${b-r}</span>` : `<span class="rkc dn">▼${r-b}</span>`;
+}
+function weightSummary(){
+  const top = candSorted(), base = new Set(L.candidates.map(c=>c.code));
+  const added = top.filter(c => !base.has(c.code)), moved = top.filter((c,i) => base.has(c.code) && baseRank(c.code)!==i+1).length;
+  return {added, moved};
+}
 function weightBox(){
   const w = WT || cfgW(), cur = PRESETS.find(([,v]) => v ? WKEYS.every(k => +v[k] === +w[k]) : !isCustom());
   const tot = WKEYS.reduce((a,k)=>a+(+w[k]||0),0);
   return `<details class="block wbox" id="wbox" ${isCustom()?"open":""}><summary><b>점수 비중</b> <small>${cur ? cur[0] : "직접 조정"} — 가치 ${w.value}, 배당 ${w.dividend}, 퀄리티 ${w.quality}, 성장 ${w.growth}</small></summary>
     <div class="chips" style="margin-top:10px">${PRESETS.map(([n,v],i) => `<button class="chip" data-pre="${i}" aria-pressed="${cur&&cur[0]===n}">${n}</button>`).join("")}</div>
     ${WKEYS.map(k => `<label class="wrow"><span><i style="background:${CAT[k][1]}"></i>${CAT[k][0]}</span><input type="range" min="0" max="60" step="5" value="${w[k]}" data-w="${k}"><b>${w[k]}</b><small>${tot?Math.round(w[k]/tot*100):0}%</small></label>`).join("")}
+    ${isCustom() ? (() => { const x = weightSummary(); return `<p class="wsum">기본 대비 순위 바뀐 종목 ${x.moved}개, 새로 들어온 종목 ${x.added.length}개${x.added.length?` (${x.added.map(c=>esc(c.name)).join(", ")})`:""}. 각 종목 옆 ▲▼가 기본 순위 대비 변화입니다.</p>`; })() : ""}
     <p class="note" style="margin:6px 0 0">비중을 바꾸면 기준을 통과한 ${L.candidates.length + (L.others||[]).length}종목 전체를 다시 줄 세워 상위 ${L.config.top_n||30}종목을 보여줍니다. 합계가 100이 아니어도 비율로 계산하고, 위험 공시 감점은 그대로 적용합니다. 설정은 이 기기에 저장됩니다.</p></details>`;
 }
 function rankOf(code){ return candSorted().findIndex(c => c.code === code) + 1; }
@@ -599,7 +615,7 @@ function renderCand(){
     <div class="list">${list.map(c => `
       <button class="row" data-code="${c.code}">
         <span class="rk">${rankOf(c.code)}</span>
-        <span><span class="nm">${esc(c.name)}</span>${isCustom()&&U?.u?.[c.code]?.rk&&U.u[c.code].rk!==rankOf(c.code)?`<span class="mm">기본 ${U.u[c.code].rk}위</span>`:""}${ALT[c.code]&&c.score_alt!=null?`<span class="mm">원래 추정</span>`:""}${c.tv20!=null&&c.tv20<(L.config.low_trading_value_eok||5)?`<span class="flag">거래 적음</span>`:""}${(c.group||[]).length?`<span class="mm">계열 ${c.group.length+1}</span>`:""}${bm[c.code]?`<span class="bd s${bm[c.code].stage}">바닥${CIRC[bm[c.code].stage]||""}</span>`:""}${held.has(c.code)?`<span class="held">보유</span>`:""}${MEMO[c.code]?`<span class="mm">메모</span>`:""}${(c.cautions||[]).length?`<span class="flag">주의 ${c.cautions.length}</span>`:""}
+        <span><span class="nm">${esc(c.name)}</span>${isCustom()?rkBadge(c):""}${ALT[c.code]&&c.score_alt!=null?`<span class="mm">원래 추정</span>`:""}${c.tv20!=null&&c.tv20<(L.config.low_trading_value_eok||5)?`<span class="flag">거래 적음</span>`:""}${(c.group||[]).length?`<span class="mm">계열 ${c.group.length+1}</span>`:""}${bm[c.code]?`<span class="bd s${bm[c.code].stage}">바닥${CIRC[bm[c.code].stage]||""}</span>`:""}${held.has(c.code)?`<span class="held">보유</span>`:""}${MEMO[c.code]?`<span class="mm">메모</span>`:""}${(c.cautions||[]).length?`<span class="flag">주의 ${c.cautions.length}</span>`:""}
           <span class="meta" style="display:block">${esc(c.sector)}, ${c.market==="KOSPI"?"코스피":"코스닥"}, PER ${c.per??"–"}배, 감사 ${esc(firm(c.auditor))}</span></span>
         <span class="sc">${Math.round(effScore(c))}<span>점</span></span>
         <span class="body">${segbar(effCats(c))}${c.reasons ? band(c) : `<span class="why">기대 배당률 ${pct(c.yield)} — 기본 비중에서는 순위 밖이라 요약 정보만 있습니다</span>`}${(c.reasons||[])[0]?`<span class="why">${esc(c.reasons[0])}</span>`:""}</span>
@@ -607,10 +623,17 @@ function renderCand(){
     ${L.others.length ? `<p class="note">기준은 통과했지만 순위 밖인 종목 ${L.others.length}개는 보유 종목 비교에 사용됩니다.</p>`:""}`;
   el.querySelectorAll(".chip").forEach(b => b.onclick = () => { candFilter = b.dataset.f; renderCand(); });
   el.querySelectorAll(".row").forEach(b => b.onclick = () => findCand(b.dataset.code) ? openDetail(b.dataset.code) : openLookup(b.dataset.code));
-  el.querySelectorAll("[data-pre]").forEach(b => b.onclick = () => { const v = PRESETS[+b.dataset.pre][1]; WT = v ? {...v} : null; store.set("dv.wt", WT); renderCand(); });
+  const applied = (label) => {
+    store.set("dv.wt", WT); renderCand();
+    const d = $("#wbox"); if(d) d.open = true;
+    if(!isCustom()) { toast("기본 비중 순위로 돌아왔습니다"); return; }
+    const x = weightSummary(), t = candSorted()[0];
+    toast(`${label} 적용 — 1위 ${t.name}, 순위 변동 ${x.moved}개, 새로 ${x.added.length}개`);
+  };
+  el.querySelectorAll("[data-pre]").forEach(b => b.onclick = () => { const p_ = PRESETS[+b.dataset.pre]; WT = p_[1] ? {...p_[1]} : null; applied(p_[0]); });
   el.querySelectorAll("[data-w]").forEach(r => {
     r.oninput = () => { r.nextElementSibling.textContent = r.value; };
-    r.onchange = () => { WT = {...(WT || cfgW()), [r.dataset.w]: +r.value}; if(!isCustom()) WT = null; store.set("dv.wt", WT); renderCand(); setTimeout(()=>{ const d=$("#wbox"); if(d) d.open = true; }, 0); };
+    r.onchange = () => { WT = {...(WT || cfgW()), [r.dataset.w]: +r.value}; if(!isCustom()) WT = null; applied("직접 조정"); };
   });
   const ob = $("#ovlBtn"); if(ob) ob.onclick = openOverlap;
   $("#lookForm").onsubmit = e => { e.preventDefault(); lookup($("#lookInput").value); $("#lookInput").blur(); };
