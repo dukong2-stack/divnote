@@ -488,6 +488,7 @@ function openLookup(code){
     ${memoBlock(code)}
     <div class="links">
       <a class="btn" href="https://finance.naver.com/item/main.naver?code=${code}" target="_blank" rel="noopener">네이버 증권</a>
+      <button class="btn" data-tong="${code}">증권통</button>
       <a class="btn" href="https://dart.fss.or.kr/dsab007/main.do?option=corp&textCrpNm=${encodeURIComponent(p?.[0]||"")}" target="_blank" rel="noopener">DART 공시</a>
     </div>`;
   $("#closeSheet").onclick = closeSheet;
@@ -655,6 +656,7 @@ function openDetail(code, fromList=false){
     <div class="links">
       ${held?"":`<button class="btn pri" id="addFromDetail">보유에 추가</button>`}
       <a class="btn" href="https://finance.naver.com/item/main.naver?code=${c.code}" target="_blank" rel="noopener">네이버 증권</a>
+      <button class="btn" data-tong="${c.code}">증권통</button>
       <a class="btn" href="https://dart.fss.or.kr/dsab007/main.do?option=corp&textCrpNm=${encodeURIComponent(c.name)}" target="_blank" rel="noopener">DART 공시</a>
     </div>
     ${discBlock(c)}`;
@@ -983,6 +985,27 @@ window.addEventListener("popstate", () => {
   clearTimeout(guardTimer);
   guardTimer = setTimeout(() => { if(history.state?.v === "root") history.pushState({v:"app"}, ""); }, 2200);
 });
+
+/* ── 증권통 열기: 종목명 복사 → 앱 실행 (안드로이드) ── */
+const TONG_PKG = "semaphore.stockclient";
+async function copyText(t){
+  try{ await navigator.clipboard.writeText(t); return true; }catch(e){
+    const x = document.createElement("textarea"); x.value = t; document.body.appendChild(x); x.select();
+    let ok = false; try{ ok = document.execCommand("copy"); }catch(_){} x.remove(); return ok;
+  }
+}
+function launchTong(){
+  if(!/Android/i.test(navigator.userAgent)) return;
+  const fb = encodeURIComponent(`https://play.google.com/store/apps/details?id=${TONG_PKG}`);
+  setTimeout(() => { location.href = `intent://#Intent;package=${TONG_PKG};S.browser_fallback_url=${fb};end`; }, 700);
+}
+async function openTong(code){
+  const name = nameOf(code);
+  await copyText(name);
+  toast(`${name} 복사됨 — 증권통 검색창에 붙여넣기 하세요`);
+  launchTong();
+}
+document.addEventListener("click", e => { const b = e.target.closest("[data-tong]"); if(b){ e.preventDefault(); openTong(b.dataset.tong); } });
 
 if("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 load();
