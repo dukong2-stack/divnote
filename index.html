@@ -197,6 +197,13 @@ table.kv td small.up{color:var(--up)}table.kv td small.down{color:var(--down)}
 .status ul{margin:6px 0 0;padding-left:18px}
 .rh{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
 .rh span{font-size:12px;border:1px solid var(--line);border-radius:999px;padding:2px 9px;background:var(--bg)}
+.wbox summary{cursor:pointer;list-style:none;font-size:14px}
+.wbox summary::-webkit-details-marker{display:none}
+.wbox summary small{color:var(--muted);font-weight:400;margin-left:4px}
+.wrow{display:grid;grid-template-columns:62px 1fr 26px 34px;align-items:center;gap:8px;font-size:13px;margin-top:8px}
+.wrow span i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:5px}
+.wrow input{width:100%;accent-color:var(--celadon)}
+.wrow b{text-align:right}.wrow small{color:var(--muted);text-align:right}
 .toast{position:fixed;left:50%;bottom:calc(76px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:9px 16px;border-radius:999px;font-size:13px;z-index:30;opacity:0;max-width:90%;text-align:center;pointer-events:none;transition:opacity .2s}
 .toast.on{opacity:.92}
 .note{font-size:12px;color:var(--muted);margin:10px 2px}
@@ -248,9 +255,37 @@ let RULES = store.get("dv.rules", {targetN:12, maxW:10, secCap:25, band:5, gap:2
 let L = null, U = null, P = null, H = [], B = null, SNAP = [];
 let candFilter = "all";
 let ALT = store.get("dv.alt", {});
-const effScore = c => (ALT[c.code] && c.score_alt != null) ? c.score_alt : c.score;
 const effCats = c => (ALT[c.code] && c.cats_alt) ? c.cats_alt : c.cats;
-function candSorted(){ return [...L.candidates].sort((a,b) => effScore(b) - effScore(a)); }
+/* ── 점수 비중 직접 조정 ── */
+const WKEYS = ["value","dividend","quality","growth"];
+const PRESETS = [
+  ["기본", null],
+  ["배당 중시", {value:20, dividend:45, quality:20, growth:15}],
+  ["가치 중시", {value:45, dividend:20, quality:20, growth:15}],
+  ["안정 중시", {value:25, dividend:25, quality:40, growth:10}],
+  ["성장 중시", {value:25, dividend:15, quality:20, growth:40}],
+];
+let WT = store.get("dv.wt", null);
+const cfgW = () => L.config.weights;
+const wavg = (cats, w) => { const t = WKEYS.reduce((a,k)=>a+(+w[k]||0),0) || 1; return WKEYS.reduce((a,k)=>a+(cats[k]||0)*(+w[k]||0),0) / t; };
+const isCustom = () => !!(L && WT && WKEYS.some(k => +WT[k] !== +cfgW()[k]));
+function penOf(c){ const p = Math.round((c.score - wavg(c.cats, cfgW())) * 10) / 10; return p <= -1 ? p : 0; }
+function effScore(c){
+  if(!isCustom()) return (ALT[c.code] && c.score_alt != null) ? c.score_alt : c.score;
+  return Math.round((wavg(effCats(c), WT) + penOf(c)) * 10) / 10;
+}
+function candSorted(){
+  if(!isCustom()) return [...L.candidates].sort((a,b) => effScore(b) - effScore(a));
+  return [...L.candidates, ...(L.others||[])].sort((a,b) => effScore(b) - effScore(a)).slice(0, L.config.top_n || 30);
+}
+function weightBox(){
+  const w = WT || cfgW(), cur = PRESETS.find(([,v]) => v ? WKEYS.every(k => +v[k] === +w[k]) : !isCustom());
+  const tot = WKEYS.reduce((a,k)=>a+(+w[k]||0),0);
+  return `<details class="block wbox" id="wbox" ${isCustom()?"open":""}><summary><b>점수 비중</b> <small>${cur ? cur[0] : "직접 조정"} — 가치 ${w.value}, 배당 ${w.dividend}, 퀄리티 ${w.quality}, 성장 ${w.growth}</small></summary>
+    <div class="chips" style="margin-top:10px">${PRESETS.map(([n,v],i) => `<button class="chip" data-pre="${i}" aria-pressed="${cur&&cur[0]===n}">${n}</button>`).join("")}</div>
+    ${WKEYS.map(k => `<label class="wrow"><span><i style="background:${CAT[k][1]}"></i>${CAT[k][0]}</span><input type="range" min="0" max="60" step="5" value="${w[k]}" data-w="${k}"><b>${w[k]}</b><small>${tot?Math.round(w[k]/tot*100):0}%</small></label>`).join("")}
+    <p class="note" style="margin:6px 0 0">비중을 바꾸면 기준을 통과한 ${L.candidates.length + (L.others||[]).length}종목 전체를 다시 줄 세워 상위 ${L.config.top_n||30}종목을 보여줍니다. 합계가 100이 아니어도 비율로 계산하고, 위험 공시 감점은 그대로 적용합니다. 설정은 이 기기에 저장됩니다.</p></details>`;
+}
 function rankOf(code){ return candSorted().findIndex(c => c.code === code) + 1; }
 
 async function getJSON(path){
@@ -464,7 +499,8 @@ function openLookup(code){
   const u = U?.u?.[code], o = L?.others?.find(x => x.code===code), p = P?.p?.[code];
   const C = L.config, top = C.top_n;
   let status;
-  if(o) status = `<div class="status"><b>기준은 모두 통과, 순위 ${u?.rk ?? "–"}위 (${Math.round(o.score)}점)</b>상위 ${top}위 안에 들지 못해 후보 목록에는 없습니다. 30위 점수는 ${Math.round(L.candidates[L.candidates.length-1]?.score ?? 0)}점입니다.</div>`;
+  if(o && isCustom() && rankOf(code)) status = `<div class="status"><b>조정한 비중 기준 ${rankOf(code)}위 (${Math.round(effScore(o))}점)</b>기본 비중에서는 ${u?.rk ?? "–"}위(${Math.round(o.score)}점)라 상세 분석 자료는 요약만 있습니다. 다음 수집 때 상위 ${top}위에 들면 전체 자료가 생깁니다.</div>`;
+  else if(o) status = `<div class="status"><b>기준은 모두 통과, 순위 ${u?.rk ?? "–"}위 (${Math.round(o.score)}점)</b>상위 ${top}위 안에 들지 못해 후보 목록에는 없습니다. 30위 점수는 ${Math.round(L.candidates[L.candidates.length-1]?.score ?? 0)}점입니다.${isCustom()?` 조정한 비중으로는 ${Math.round(effScore(o))}점입니다.`:""}</div>`;
   else if(u && u.f?.length) status = `<div class="status out"><b>선정 기준에서 탈락</b><ul>${u.f.map(f => `<li>${esc(f)}</li>`).join("")}</ul></div>`;
   else if(p && !code.endsWith("0")) status = `<div class="status out"><b>평가 대상 아님</b>우선주는 평가하지 않습니다. 보통주로 조회해 보세요.</div>`;
   else if(p && (p[2]||0) < C.min_mcap_eok) status = `<div class="status out"><b>평가 대상 아님</b>시가총액 ${eokTxt(p[2])}으로 기준(${C.min_mcap_eok.toLocaleString("ko-KR")}억) 미달입니다.</div>`;
@@ -547,14 +583,15 @@ function renderCand(){
   const bm = badakMap();
   let list = candSorted();
   if(candFilter==="new") list = list.filter(c => !held.has(c.code));
-  if(candFilter==="clean") list = list.filter(c => !c.cautions.length);
+  if(candFilter==="clean") list = list.filter(c => c.cautions && !c.cautions.length);
   el.innerHTML = `
     <form class="search" id="lookForm" autocomplete="off"><input id="lookInput" list="stocklist" placeholder="종목 조회 — 왜 빠졌는지, 몇 위인지" aria-label="종목 조회"><button class="btn" type="submit">조회</button></form>
-    <h2>이번 회차 후보 ${L.candidates.length}종목</h2>
+    <h2>이번 회차 후보 ${L.candidates.length}종목${isCustom()?' <small style="font-weight:500;color:var(--muted);font-size:13px">비중 조정 순위</small>':""}</h2>
     <p class="lede">${L.fiscal_year}년 사업보고서 기준. 평가 ${L.counts.universe}종목 중 이익 기준 ${L.counts.stage1}종목, 배당 기준까지 ${L.counts.stage2}종목 통과.</p>
     ${B ? (() => { const ov = overlaps(); const cnt = k => ov.filter(o => o.b.stage===k).length;
       return `<button class="ovl" id="ovlBtn"><span class="n">${ov.length}</span><span class="t">바닥 신호와 겹치는 후보<small>${ov.length ? `③ ${cnt(3)}, ② ${cnt(2)}, ① ${cnt(1)} — 눌러서 목록 보기` : "지금은 겹치는 종목이 없습니다"}</small></span><span class="go">›</span></button>`; })() : ""}
     ${(L.conc||[]).length ? `<p class="note" style="color:var(--warn,#b45309);margin:0 0 8px">후보 ${L.candidates.length}종목 중 ${L.conc.map(x=>`${esc(x.k)} ${x.n}개(${Math.round(x.n/L.candidates.length*100)}%)`).join(", ")} — 한 업종에 쏠려 있습니다. 같은 경기 흐름에 함께 움직일 수 있으니 나눠 담으세요.</p>` : ""}
+    ${weightBox()}
     <div class="chips" role="group">
       ${[["all","전체"],["new","미보유"],["clean","주의사항 없음"]].map(([k,t]) => `<button class="chip" data-f="${k}" aria-pressed="${candFilter===k}">${t}</button>`).join("")}
     </div>
@@ -562,14 +599,19 @@ function renderCand(){
     <div class="list">${list.map(c => `
       <button class="row" data-code="${c.code}">
         <span class="rk">${rankOf(c.code)}</span>
-        <span><span class="nm">${esc(c.name)}</span>${ALT[c.code]&&c.score_alt!=null?`<span class="mm">원래 추정</span>`:""}${c.tv20!=null&&c.tv20<(L.config.low_trading_value_eok||5)?`<span class="flag">거래 적음</span>`:""}${(c.group||[]).length?`<span class="mm">계열 ${c.group.length+1}</span>`:""}${bm[c.code]?`<span class="bd s${bm[c.code].stage}">바닥${CIRC[bm[c.code].stage]||""}</span>`:""}${held.has(c.code)?`<span class="held">보유</span>`:""}${MEMO[c.code]?`<span class="mm">메모</span>`:""}${c.cautions.length?`<span class="flag">주의 ${c.cautions.length}</span>`:""}
+        <span><span class="nm">${esc(c.name)}</span>${isCustom()&&U?.u?.[c.code]?.rk&&U.u[c.code].rk!==rankOf(c.code)?`<span class="mm">기본 ${U.u[c.code].rk}위</span>`:""}${ALT[c.code]&&c.score_alt!=null?`<span class="mm">원래 추정</span>`:""}${c.tv20!=null&&c.tv20<(L.config.low_trading_value_eok||5)?`<span class="flag">거래 적음</span>`:""}${(c.group||[]).length?`<span class="mm">계열 ${c.group.length+1}</span>`:""}${bm[c.code]?`<span class="bd s${bm[c.code].stage}">바닥${CIRC[bm[c.code].stage]||""}</span>`:""}${held.has(c.code)?`<span class="held">보유</span>`:""}${MEMO[c.code]?`<span class="mm">메모</span>`:""}${(c.cautions||[]).length?`<span class="flag">주의 ${c.cautions.length}</span>`:""}
           <span class="meta" style="display:block">${esc(c.sector)}, ${c.market==="KOSPI"?"코스피":"코스닥"}, PER ${c.per??"–"}배, 감사 ${esc(firm(c.auditor))}</span></span>
         <span class="sc">${Math.round(effScore(c))}<span>점</span></span>
-        <span class="body">${segbar(effCats(c))}${band(c)}${c.reasons[0]?`<span class="why">${esc(c.reasons[0])}</span>`:""}</span>
+        <span class="body">${segbar(effCats(c))}${c.reasons ? band(c) : `<span class="why">기대 배당률 ${pct(c.yield)} — 기본 비중에서는 순위 밖이라 요약 정보만 있습니다</span>`}${(c.reasons||[])[0]?`<span class="why">${esc(c.reasons[0])}</span>`:""}</span>
       </button>`).join("") || `<div class="empty"><b>조건에 맞는 종목이 없습니다</b>필터를 전체로 바꿔 보세요.</div>`}</div>
     ${L.others.length ? `<p class="note">기준은 통과했지만 순위 밖인 종목 ${L.others.length}개는 보유 종목 비교에 사용됩니다.</p>`:""}`;
   el.querySelectorAll(".chip").forEach(b => b.onclick = () => { candFilter = b.dataset.f; renderCand(); });
-  el.querySelectorAll(".row").forEach(b => b.onclick = () => openDetail(b.dataset.code));
+  el.querySelectorAll(".row").forEach(b => b.onclick = () => findCand(b.dataset.code) ? openDetail(b.dataset.code) : openLookup(b.dataset.code));
+  el.querySelectorAll("[data-pre]").forEach(b => b.onclick = () => { const v = PRESETS[+b.dataset.pre][1]; WT = v ? {...v} : null; store.set("dv.wt", WT); renderCand(); });
+  el.querySelectorAll("[data-w]").forEach(r => {
+    r.oninput = () => { r.nextElementSibling.textContent = r.value; };
+    r.onchange = () => { WT = {...(WT || cfgW()), [r.dataset.w]: +r.value}; if(!isCustom()) WT = null; store.set("dv.wt", WT); renderCand(); setTimeout(()=>{ const d=$("#wbox"); if(d) d.open = true; }, 0); };
+  });
   const ob = $("#ovlBtn"); if(ob) ob.onclick = openOverlap;
   $("#lookForm").onsubmit = e => { e.preventDefault(); lookup($("#lookInput").value); $("#lookInput").blur(); };
   $("#lookInput").onchange = e => { if(/\([0-9A-Z]{6}\)$/.test(e.target.value)){ lookup(e.target.value); e.target.blur(); } };
@@ -605,7 +647,7 @@ function openDetail(code, fromList=false){
     <div class="bar"><div><h3>${esc(c.name)}</h3><div class="sub">${c.code}, ${esc(c.sector)}, ${c.market==="KOSPI"?"코스피":"코스닥"}, 시총 ${eokTxt(c.mcap)}, ${won(c.price)}원</div></div>
       <button class="x" aria-label="닫기" id="closeSheet">×</button></div>
     ${(() => { const b = badakMap()[c.code]; return b ? `<div class="block" style="padding:10px 16px"><span class="bd s${b.stage}" style="margin:0 8px 0 0">${STG[b.stage]}</span>바닥 신호 점수 ${Math.round(b.score)}, ${esc(b.since||"")} 진입</div>` : ""; })()}
-    <div class="block"><div class="scoreline"><div><div class="big">${Math.round(effScore(c))}</div><div class="sub">후보 ${rank}위${ALT[c.code]&&c.score_alt!=null?"<br>원래 추정 적용":""}</div></div>
+    <div class="block"><div class="scoreline"><div><div class="big">${Math.round(effScore(c))}</div><div class="sub">${rank?`후보 ${rank}위`:"조정 비중 상위 밖"}${isCustom()&&U?.u?.[c.code]?.rk?` (기본 ${U.u[c.code].rk}위)`:""}${ALT[c.code]&&c.score_alt!=null?"<br>원래 추정 적용":""}</div></div>
       <div class="cats">${Object.entries(CAT).map(([k,[t,col]]) => `<div class="cat"><span>${t}</span><span class="t"><b style="width:${effCats(c)[k]}%;background:${col}"></b></span><em>${effCats(c)[k]}</em></div>`).join("")}</div></div></div>
     ${SNAP.length ? `<div class="block" style="padding:10px 16px"><span style="font-size:13px;color:var(--muted)">순위 변화</span>${rankHistory(c.code)}</div>`:""}
     <div class="block"><h4>배당률 밴드</h4>${band(c,true)}
